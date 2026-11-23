@@ -1,8 +1,12 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# motiongen: offline clip factory (Kimodo batch worker)
+# scrib-motiongen: offline clip factory (Kimodo batch worker)
 
-Spec: `bevyrrowind/docs/specs/motion-generation.md` (MG1). Turns activity recipes (`recipes/*.toml`) into SOMA-77
-BVH clips with NVIDIA Kimodo, in one persistent process. Offline tool only: never part of the game or the bake.
+Part of [Scrib tools](https://github.com/scrib-tools). Turns activity recipes (`motiongen/recipes/*.toml`) into
+SOMA-77 BVH clips with NVIDIA Kimodo, in one persistent process. Offline tool only: never part of a game or its bake.
+GPL-3.0-or-later (`LICENSE`). Moved out of the [Scrib](https://github.com/scrib-tools/Scrib) repo on 2026-11-23 with its history.
+
+Spec and the game-side contract (import onto a rig, census `bands.json`, clip preview, `.prov.json` sidecar):
+Scrib's [motion-generation.md](https://github.com/scrib-tools/Scrib/blob/main/bevyrrowind/docs/specs/motion-generation.md) (MG1-MG10).
 
 ## Setup (once)
 
@@ -16,14 +20,15 @@ BVH clips with NVIDIA Kimodo, in one persistent process. Offline tool only: neve
 
 ## Commands
 
-Run from `bevyrrowind/tools` (or put that folder on `PYTHONPATH`) with the Kimodo venv python:
+Install it into the Kimodo venv once (`uv pip install -e <this repo>` with that venv active), or run from the repo
+root (the folder holding `motiongen/`). Paths below are from the repo root; `--out` is any folder, e.g. Scrib's
+`animation packs/generated`:
 
 ```sh
-cd bevyrrowind/tools
 PY=/c/mbtest/kimodo/.venv/Scripts/python.exe
 $PY -m motiongen selftest                                    # parse recipes/, plan, format checks (no GPU)
-$PY -m motiongen plan motiongen/recipes/seed.toml --out "../../animation packs/generated"   # dry run
-$PY -m motiongen run  motiongen/recipes/seed.toml --out "../../animation packs/generated" [--only 'sit.*'] [--steps 50]
+$PY -m motiongen plan motiongen/recipes/seed.toml --out "<scrib>/animation packs/generated"   # dry run
+$PY -m motiongen run  motiongen/recipes/seed.toml --out "<scrib>/animation packs/generated" [--only 'sit.*'] [--steps 50]
 $PY -m motiongen bench motiongen/recipes/seed.toml --out <dir>   # speed matrix: steps, batch, precision, postprocess
 $PY -m motiongen joints                                      # rewrite soma77_joints.txt
 ```
@@ -32,7 +37,7 @@ $PY -m motiongen joints                                      # rewrite soma77_jo
 source BVH (`skate` >= 60 cm/s, `jerk` p99 >= 5000 m/s^3, turn-in-place `turn_mag` > 9 deg off the prompt and `no_step`;
 a wrong-way turn is only `mirror_candidate`) and prompt-group triage (>= 2/3 of a group's takes gated = failing).
 Writes `<dir>/grades.json` atomically (stem -> type, gates, mirror_candidate, metrics; `_groups`), prints a table per group;
-`--verdicts` prints gated vs the owner's reject / maybe / keep. Design: `superfargoth/docs/research/animation/17-autograde-2026-11-12.md`.
+`--verdicts` prints gated vs the owner's reject / maybe / keep. Design: Scrib's [17-autograde](https://github.com/scrib-tools/Scrib/blob/main/superfargoth/docs/research/animation/17-autograde-2026-11-12.md).
 
 `run` options: `--bands <bands.json>` (default `<out>/bands.json` from the MG4 census if present, else
 `default_bands.json`, placeholders), `--batch N` (max samples per GPU batch, default 8), `--steps N` (default 50),

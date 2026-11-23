@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Recipe TOML parsing and job planning. Pure Python (no torch), so `plan` and `selftest` need no GPU.
 
-Recipe format: bevyrrowind/docs/specs/motion-generation.md, "Recipes (MG1)". All heights are meters,
+Recipe format: https://github.com/scrib-tools/Scrib/blob/main/bevyrrowind/docs/specs/motion-generation.md, "Recipes (MG1)". All heights are meters,
 Kimodo canonical space: Y up, the character starts at XZ (0, 0) facing +Z, left hand on +X.
 """
 

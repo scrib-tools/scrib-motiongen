@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """`python -m motiongen grade <dir>`: physical reject gates and prompt-group triage for generated clips -> grades.json.
 
-Design and calibration: `superfargoth/docs/research/animation/17-autograde-2026-11-12.md` (AG0), slice AG1. Only the
+Design and calibration: https://github.com/scrib-tools/Scrib/blob/main/superfargoth/docs/research/animation/17-autograde-2026-11-12.md (AG0), slice AG1. Only the
 gates that are physical, not fitted to the owner's labels (doc section 3, "Hard gates", first rows):
 
 - `skate`:    foot skate >= 60 cm/s per contact second (cycle, start, stop, pivot; any non-turn move).

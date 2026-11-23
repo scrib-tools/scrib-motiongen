@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scrib-motiongen"
+dynamic = ["version"]
+description = "Offline clip factory: activity recipes to SOMA-77 BVH clips with NVIDIA Kimodo (Scrib tools)"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.11"
+# numpy only for `selftest`, `plan` and `grade`; `run` and `bench` also need torch, huggingface_hub and Kimodo
+# (installed from its own clone, see README "Setup").
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+generate = ["torch", "huggingface_hub"]
+
+[project.scripts]
+motiongen = "motiongen.__main__:main"
+
+[tool.setuptools]
+packages = ["motiongen"]
+
+[tool.setuptools.package-data]
+motiongen = ["default_bands.json", "soma77_joints.txt", "recipes/*.toml"]
+
+[tool.setuptools.dynamic]
+version = { attr = "motiongen.TOOL_VERSION" }

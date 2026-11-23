@@ -276,7 +276,7 @@ def main(argv=None) -> int:
     def common(p, need_out: bool):
         p.add_argument("recipes", nargs="+", help="recipe TOML files")
         p.add_argument("--out", required=need_out, help="output root (e.g. 'animation packs/generated')")
-        p.add_argument("--bands", help="bands.json (default: <out>/bands.json if present, else tools/motiongen/default_bands.json)")
+        p.add_argument("--bands", help="bands.json (default: <out>/bands.json if present, else motiongen/default_bands.json)")
         p.add_argument("--only", action="append", help="activity id glob (repeatable), e.g. 'sit.*'")
         p.add_argument("--batch", type=int, default=DEFAULT_BATCH, help=f"max samples per GPU batch (default {DEFAULT_BATCH})")
 
