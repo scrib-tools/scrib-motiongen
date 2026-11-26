@@ -2,7 +2,8 @@
 """Link recipes (MG8): `[[link]]` and `[[loop_seam]]` tables -> MotionBricks link jobs. Pure Python (no GPU).
 
 A link is one MotionBricks in-betweening from a context pose (the last 4 frames up to `from`) to a target pose (the
-first `target_poses` frames from `to`); a loop seam links a clip's end back to its own start. Format: README "link".
+first `target_poses` frames from `to`); a loop seam links a clip's end back to its own start; a hub loop (AN26a) is a
+loop take made exact on a hub: link hub -> clip start, the clip, link clip end -> the same hub, joined in one take. Format: README "link".
 Pose sources are hubs (`recipes/hubs.toml`) or kept SOMA-77 takes; poses from MotionBricks' bundled BONES samples are
 refused (NVIDIA Sample Data Evaluation License: evaluation only, no distributed derivatives).
 """
@@ -29,6 +30,8 @@ DEFAULT_TOKENS = (8, 14)  # MotionBricksInferenceConfig default `allowed_token_c
 SEAM_TOKENS = 6  # loop seams: shortest link (18 frames), the AN13 spike setting
 LINK_KEYS = {"id", "from", "to", "tokens", "seconds", "placement", "target_poses", "variants", "notes"}
 SEAM_KEYS = {"id", "clip", "tokens", "seconds", "target_poses", "variants", "notes"}
+HUB_LOOP_KEYS = {"id", "hub", "clip", "tokens", "seconds", "target_poses", "variants", "notes"}
+HUB_LOOP_TOKENS = (6, 10)  # hub loops: two short links (hub -> clip start, clip end -> hub), the model picks
 VARIANT_KEYS = {"tokens", "seconds", "placement", "target_poses"}
 PLACEMENTS = ("feet", "root")
 CLIP_RE = re.compile(r"^clip:(?P<path>.+?)#(?P<at>start|end|\d+)$")
@@ -147,7 +150,7 @@ def _target_poses(src: str, where: str, v: Any) -> int:
 class LinkJob:
     id: str
     take: int
-    kind: str  # "link" | "loop_seam"
+    kind: str  # "link" | "loop_seam" | "hub_loop"
     src: PoseRef  # context: the 4 frames up to it
     dst: PoseRef  # target: the frames from it
     tokens: tuple[int, ...]
@@ -181,6 +184,7 @@ class LinkRecipe:
     target_poses: int
     variants: list[dict] = field(default_factory=list)
     source: str = ""
+    more_dst: list[PoseRef] = field(default_factory=list)  # hub_loop: further clips (one take each per variant)
 
 
 def parse_links_text(text: str, src: str, hubs=None) -> list[LinkRecipe]:
@@ -188,11 +192,11 @@ def parse_links_text(text: str, src: str, hubs=None) -> list[LinkRecipe]:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise RecipeError(f"{src}: TOML error: {e}") from e
-    if set(data) - {"link", "loop_seam"}:
-        raise RecipeError(f"{src}: unknown top-level keys {sorted(set(data) - {'link', 'loop_seam'})} "
-                          "(a link recipe has [[link]] and [[loop_seam]] tables)")
+    if set(data) - {"link", "loop_seam", "hub_loop"}:
+        raise RecipeError(f"{src}: unknown top-level keys {sorted(set(data) - {'link', 'loop_seam', 'hub_loop'})} "
+                          "(a link recipe has [[link]], [[loop_seam]] and [[hub_loop]] tables)")
     out: list[LinkRecipe] = []
-    for kind, keys in (("link", LINK_KEYS), ("loop_seam", SEAM_KEYS)):
+    for kind, keys in (("link", LINK_KEYS), ("loop_seam", SEAM_KEYS), ("hub_loop", HUB_LOOP_KEYS)):
         for i, t in enumerate(data.get(kind, [])):
             where = f"{kind}[{i}]"
             if set(t) - keys:
@@ -211,10 +215,20 @@ def parse_links_text(text: str, src: str, hubs=None) -> list[LinkRecipe]:
                 default_tokens = DEFAULT_TOKENS
             else:
                 clip = t.get("clip")
-                if not isinstance(clip, str) or not clip.lower().endswith(".bvh"):
-                    raise _err(src, f"{where}.clip", f"{clip!r}: expected a .bvh path (a loop take)")
-                a, b = PoseRef("clip", clip, "end"), PoseRef("clip", clip, "start")
-                placement, default_tokens = "seam", (SEAM_TOKENS,)
+                clips = clip if kind == "hub_loop" and isinstance(clip, list) and clip else [clip]
+                if not all(isinstance(c, str) and c.lower().endswith(".bvh") for c in clips):
+                    raise _err(src, f"{where}.clip", f"{clip!r}: expected a .bvh path (a loop take)"
+                               + (" or a list of them (one take each, in order)" if kind == "hub_loop" else ""))
+                clip = clips[0]
+                if kind == "loop_seam":
+                    a, b = PoseRef("clip", clip, "end"), PoseRef("clip", clip, "start")
+                    placement, default_tokens = "seam", (SEAM_TOKENS,)
+                else:  # hub_loop: src = the hub, dst = the clip (its start; its end links back to the hub)
+                    hub = t.get("hub")
+                    if not isinstance(hub, str) or hub.startswith(("hub:", "clip:")):
+                        raise _err(src, f"{where}.hub", f"{hub!r}: expected a hub id (recipes/hubs.toml), e.g. 'sit.chair'")
+                    a, b = _pose_ref(src, f"{where}.hub", f"hub:{hub}", "end", hubs), PoseRef("clip", clip, "start")
+                    placement, default_tokens = "hub_loop", HUB_LOOP_TOKENS
             tokens = _tokens(src, where, t)
             tokens = tuple(range(default_tokens[0], default_tokens[-1] + 1)) if tokens is None else tokens
             tp = _target_poses(src, f"{where}.target_poses", t.get("target_poses", POSES_PER_TOKEN))
@@ -225,16 +239,18 @@ def parse_links_text(text: str, src: str, hubs=None) -> list[LinkRecipe]:
                 w = f"{where}.variants[{k}]"
                 if set(v) - VARIANT_KEYS:
                     raise _err(src, w, f"unknown keys {sorted(set(v) - VARIANT_KEYS)} (allowed: {sorted(VARIANT_KEYS)})")
-                if "placement" in v and kind == "loop_seam":
-                    raise _err(src, w, "a loop seam's placement is fixed (target = the clip start at the end root)")
+                if "placement" in v and kind != "link":
+                    raise _err(src, w, f"a {kind}'s placement is fixed (the clip at the hub's pelvis, the hub back at the start)"
+                               if kind == "hub_loop" else "a loop seam's placement is fixed (target = the clip start at the end root)")
                 _tokens(src, w, v)
                 if "placement" in v:
                     _placement(src, w, v["placement"])
                 if "target_poses" in v:
                     _target_poses(src, w, v["target_poses"])
-            out.append(LinkRecipe(lid, kind, a, b, tokens, placement, tp, variants, src))
+            extra = [PoseRef("clip", c, "start") for c in clips[1:]] if kind == "hub_loop" else []
+            out.append(LinkRecipe(lid, kind, a, b, tokens, placement, tp, variants, src, extra))
     if not out:
-        raise RecipeError(f"{src}: no [[link]] or [[loop_seam]] tables")
+        raise RecipeError(f"{src}: no [[link]], [[loop_seam]] or [[hub_loop]] tables")
     ids = [r.id for r in out]
     dups = sorted({x for x in ids if ids.count(x) > 1})
     if dups:
@@ -264,14 +280,17 @@ def plan_links(recipes: list[LinkRecipe], hub_root: Path | None, only: list[str]
     for r in recipes:
         if only and not any(fnmatch.fnmatchcase(r.id, pat) for pat in only):
             continue
-        for ref, end in ((r.src, "from"), (r.dst, "to")):
+        for ref, end in ((r.src, "from"), *((d, "to") for d in [r.dst, *r.more_dst])):
             refuse_sample(ref.resolve(hub_root), f"{r.source}: {r.kind} '{r.id}'.{end}")
-        for n, v in enumerate(r.variants):
-            w = f"{r.kind} '{r.id}'.variants[{n}]"
-            tokens = _tokens(r.source, w, v) or r.tokens
-            placement = _placement(r.source, w, v["placement"]) if "placement" in v else r.placement
-            tp = v.get("target_poses", r.target_poses)
-            jobs.append(LinkJob(r.id, n, r.kind, r.src, r.dst, tokens, placement, tp, r.source))
+        n = 0
+        for dst in [r.dst, *r.more_dst]:
+            for k, v in enumerate(r.variants):
+                w = f"{r.kind} '{r.id}'.variants[{k}]"
+                tokens = _tokens(r.source, w, v) or r.tokens
+                placement = _placement(r.source, w, v["placement"]) if "placement" in v else r.placement
+                tp = v.get("target_poses", r.target_poses)
+                jobs.append(LinkJob(r.id, n, r.kind, r.src, dst, tokens, placement, tp, r.source))
+                n += 1
     return jobs
 
 

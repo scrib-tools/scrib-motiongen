@@ -1,0 +1,253 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# AN26a sit/stand batch 1, MotionBricks half (README "link"): per seat family-band the enter / exit links
+# (stand hub <-> seat hub) for the front and left sides (right = mirrored at the bake), and the seated loops made
+# exact on their seat hub ([[hub_loop]]: link hub -> take start, the take, link take end -> hub, one joined take).
+# Loop takes and hub sources were auto-picked from recipes/sit-batch1.toml's Kimodo takes by `motiongen grade`
+# (ungated, best skate + jerk p99 rank; at most 4 per group). Run in the MotionBricks venv:
+#   motiongen link motiongen/recipes/sit-batch1-links.toml --out "<scrib>/animation packs/generated/sit1"
+#     --hub-root "<scrib>/animation packs/generated"
+# Sides, slot frame (+Z = the way the seated user faces, user's left = +X): `front` = standing in front of the seat
+# facing away from it, feet where the seated feet go (placement feet); `left` = standing at the seat's left front
+# corner facing the seat (-X), a 90-degree left turn-in (dyaw +90) to sit; exit.left ends standing there facing +X
+# (turned away, ready to walk off). Offsets dx (to the character's left) / dz (forward) are the variants' sweep.
+# One MotionBricks segment each (<= 16 tokens, 1.93 s); variants sweep tokens and the side offset (no seeds).
+
+# --- seat.stool at seat64: stand.idle <-> sit.stool ---------------------------------------------------
+
+[[link]]
+id = "seat.stool.enter.front.seat64"
+from = "hub:stand.idle"
+to = "hub:sit.stool"
+placement = "feet"
+variants = [{ tokens = [8, 14] }, { tokens = [12, 16] }, { tokens = 16 }, { tokens = [10, 16], placement = { dz = 0.08 } }]
+
+[[link]]
+id = "seat.stool.enter.left.seat64"
+from = "hub:stand.idle"
+to = "hub:sit.stool"
+tokens = [12, 16]
+variants = [{ placement = { dx = 0.10, dz = 0.45, dyaw = 90 } }, { placement = { dx = 0.20, dz = 0.40, dyaw = 90 } }, { placement = { dx = 0.0, dz = 0.35, dyaw = 90 } }, { tokens = 16, placement = { dx = 0.10, dz = 0.45, dyaw = 90 } }]
+
+[[link]]
+id = "seat.stool.exit.front.seat64"
+from = "hub:sit.stool"
+to = "hub:stand.idle"
+placement = "feet"
+variants = [{ tokens = [8, 14] }, { tokens = [12, 16] }, { tokens = 16 }, { tokens = [10, 16], placement = { dz = -0.08 } }]
+
+[[link]]
+id = "seat.stool.exit.left.seat64"
+from = "hub:sit.stool"
+to = "hub:stand.idle"
+tokens = [12, 16]
+variants = [{ placement = { dx = 0.45, dz = -0.10, dyaw = 90 } }, { placement = { dx = 0.40, dz = -0.20, dyaw = 90 } }, { placement = { dx = 0.35, dz = 0.0, dyaw = 90 } }, { tokens = 16, placement = { dx = 0.45, dz = -0.10, dyaw = 90 } }]
+
+[[hub_loop]]
+id = "seat.stool.loop.rest.seat64"  # takes .00.. = Kimodo takes 04, 05, 06, 07
+hub = "sit.stool"
+clip = ["sit1/_kimodo/seat.stool.high.rest/loop/seat.stool.high.rest.loop.seat64.04.bvh", "sit1/_kimodo/seat.stool.high.rest/loop/seat.stool.high.rest.loop.seat64.05.bvh", "sit1/_kimodo/seat.stool.high.rest/loop/seat.stool.high.rest.loop.seat64.06.bvh", "sit1/_kimodo/seat.stool.high.rest/loop/seat.stool.high.rest.loop.seat64.07.bvh"]
+
+[[hub_loop]]
+id = "seat.stool.loop.fidget.seat64"  # takes .00.. = Kimodo takes 04, 06, 02, 00
+hub = "sit.stool"
+clip = ["sit1/_kimodo/seat.stool.fidget/loop/seat.stool.fidget.loop.seat64.04.bvh", "sit1/_kimodo/seat.stool.fidget/loop/seat.stool.fidget.loop.seat64.06.bvh", "sit1/_kimodo/seat.stool.fidget/loop/seat.stool.fidget.loop.seat64.02.bvh", "sit1/_kimodo/seat.stool.fidget/loop/seat.stool.fidget.loop.seat64.00.bvh"]
+
+# --- seat.chair at seat48: stand.idle <-> sit.chair ---------------------------------------------------
+
+[[link]]
+id = "seat.chair.enter.front.seat48"
+from = "hub:stand.idle"
+to = "hub:sit.chair"
+placement = "feet"
+variants = [{ tokens = [8, 14] }, { tokens = [12, 16] }, { tokens = 16 }, { tokens = [10, 16], placement = { dz = 0.08 } }]
+
+[[link]]
+id = "seat.chair.enter.left.seat48"
+from = "hub:stand.idle"
+to = "hub:sit.chair"
+tokens = [12, 16]
+variants = [{ placement = { dx = 0.10, dz = 0.45, dyaw = 90 } }, { placement = { dx = 0.20, dz = 0.40, dyaw = 90 } }, { placement = { dx = 0.0, dz = 0.35, dyaw = 90 } }, { tokens = 16, placement = { dx = 0.10, dz = 0.45, dyaw = 90 } }]
+
+[[link]]
+id = "seat.chair.exit.front.seat48"
+from = "hub:sit.chair"
+to = "hub:stand.idle"
+placement = "feet"
+variants = [{ tokens = [8, 14] }, { tokens = [12, 16] }, { tokens = 16 }, { tokens = [10, 16], placement = { dz = -0.08 } }]
+
+[[link]]
+id = "seat.chair.exit.left.seat48"
+from = "hub:sit.chair"
+to = "hub:stand.idle"
+tokens = [12, 16]
+variants = [{ placement = { dx = 0.45, dz = -0.10, dyaw = 90 } }, { placement = { dx = 0.40, dz = -0.20, dyaw = 90 } }, { placement = { dx = 0.35, dz = 0.0, dyaw = 90 } }, { tokens = 16, placement = { dx = 0.45, dz = -0.10, dyaw = 90 } }]
+
+[[hub_loop]]
+id = "seat.chair.loop.rest.seat48"  # takes .00.. = Kimodo takes 00, 02, 06, 04
+hub = "sit.chair"
+clip = ["sit1/_kimodo/seat.chair.rest/loop/seat.chair.rest.loop.seat48.00.bvh", "sit1/_kimodo/seat.chair.rest/loop/seat.chair.rest.loop.seat48.02.bvh", "sit1/_kimodo/seat.chair.rest/loop/seat.chair.rest.loop.seat48.06.bvh", "sit1/_kimodo/seat.chair.rest/loop/seat.chair.rest.loop.seat48.04.bvh"]
+
+[[hub_loop]]
+id = "seat.chair.loop.fidget.seat48"  # takes .00.. = Kimodo takes 01, 00, 02, 04
+hub = "sit.chair"
+clip = ["sit1/_kimodo/seat.chair.fidget/loop/seat.chair.fidget.loop.seat48.01.bvh", "sit1/_kimodo/seat.chair.fidget/loop/seat.chair.fidget.loop.seat48.00.bvh", "sit1/_kimodo/seat.chair.fidget/loop/seat.chair.fidget.loop.seat48.02.bvh", "sit1/_kimodo/seat.chair.high.fidget/loop/seat.chair.high.fidget.loop.seat48.04.bvh"]
+
+# --- seat.chair at seat54: stand.idle <-> sit.chair.seat54 --------------------------------------------
+
+[[link]]
+id = "seat.chair.enter.front.seat54"
+from = "hub:stand.idle"
+to = "hub:sit.chair.seat54"
+placement = "feet"
+variants = [{ tokens = [8, 14] }, { tokens = [12, 16] }, { tokens = 16 }, { tokens = [10, 16], placement = { dz = 0.08 } }]
+
+[[link]]
+id = "seat.chair.enter.left.seat54"
+from = "hub:stand.idle"
+to = "hub:sit.chair.seat54"
+tokens = [12, 16]
+variants = [{ placement = { dx = 0.10, dz = 0.45, dyaw = 90 } }, { placement = { dx = 0.20, dz = 0.40, dyaw = 90 } }, { placement = { dx = 0.0, dz = 0.35, dyaw = 90 } }, { tokens = 16, placement = { dx = 0.10, dz = 0.45, dyaw = 90 } }]
+
+[[link]]
+id = "seat.chair.exit.front.seat54"
+from = "hub:sit.chair.seat54"
+to = "hub:stand.idle"
+placement = "feet"
+variants = [{ tokens = [8, 14] }, { tokens = [12, 16] }, { tokens = 16 }, { tokens = [10, 16], placement = { dz = -0.08 } }]
+
+[[link]]
+id = "seat.chair.exit.left.seat54"
+from = "hub:sit.chair.seat54"
+to = "hub:stand.idle"
+tokens = [12, 16]
+variants = [{ placement = { dx = 0.45, dz = -0.10, dyaw = 90 } }, { placement = { dx = 0.40, dz = -0.20, dyaw = 90 } }, { placement = { dx = 0.35, dz = 0.0, dyaw = 90 } }, { tokens = 16, placement = { dx = 0.45, dz = -0.10, dyaw = 90 } }]
+
+[[hub_loop]]
+id = "seat.chair.loop.rest.seat54"  # takes .00.. = Kimodo takes 04, 07, 01, 01
+hub = "sit.chair.seat54"
+clip = ["sit1/_kimodo/seat.chair.rest/loop/seat.chair.rest.loop.seat54.04.bvh", "sit1/_kimodo/seat.chair.rest/loop/seat.chair.rest.loop.seat54.07.bvh", "sit1/_kimodo/seat.chair.high.rest/loop/seat.chair.high.rest.loop.seat54.01.bvh", "sit1/_kimodo/seat.chair.rest/loop/seat.chair.rest.loop.seat54.01.bvh"]
+
+[[hub_loop]]
+id = "seat.chair.loop.fidget.seat54"  # takes .00.. = Kimodo takes 00
+hub = "sit.chair.seat54"
+clip = ["sit1/_kimodo/seat.chair.fidget/loop/seat.chair.fidget.loop.seat54.00.bvh"]
+
+# --- seat.bench at seat48: stand.idle <-> sit.bench ---------------------------------------------------
+
+[[link]]
+id = "seat.bench.enter.front.seat48"
+from = "hub:stand.idle"
+to = "hub:sit.bench"
+placement = "feet"
+variants = [{ tokens = [8, 14] }, { tokens = [12, 16] }, { tokens = 16 }, { tokens = [10, 16], placement = { dz = 0.08 } }]
+
+[[link]]
+id = "seat.bench.enter.left.seat48"
+from = "hub:stand.idle"
+to = "hub:sit.bench"
+tokens = [12, 16]
+variants = [{ placement = { dx = 0.10, dz = 0.45, dyaw = 90 } }, { placement = { dx = 0.20, dz = 0.40, dyaw = 90 } }, { placement = { dx = 0.0, dz = 0.35, dyaw = 90 } }, { tokens = 16, placement = { dx = 0.10, dz = 0.45, dyaw = 90 } }]
+
+[[link]]
+id = "seat.bench.exit.front.seat48"
+from = "hub:sit.bench"
+to = "hub:stand.idle"
+placement = "feet"
+variants = [{ tokens = [8, 14] }, { tokens = [12, 16] }, { tokens = 16 }, { tokens = [10, 16], placement = { dz = -0.08 } }]
+
+[[link]]
+id = "seat.bench.exit.left.seat48"
+from = "hub:sit.bench"
+to = "hub:stand.idle"
+tokens = [12, 16]
+variants = [{ placement = { dx = 0.45, dz = -0.10, dyaw = 90 } }, { placement = { dx = 0.40, dz = -0.20, dyaw = 90 } }, { placement = { dx = 0.35, dz = 0.0, dyaw = 90 } }, { tokens = 16, placement = { dx = 0.45, dz = -0.10, dyaw = 90 } }]
+
+[[hub_loop]]
+id = "seat.bench.loop.rest.seat48"  # takes .00.. = Kimodo takes 01, 02, 00, 05
+hub = "sit.bench"
+clip = ["sit1/_kimodo/seat.bench.rest/loop/seat.bench.rest.loop.seat48.01.bvh", "sit1/_kimodo/seat.bench.rest/loop/seat.bench.rest.loop.seat48.02.bvh", "sit1/_kimodo/seat.bench.rest/loop/seat.bench.rest.loop.seat48.00.bvh", "sit1/_kimodo/seat.bench.rest/loop/seat.bench.rest.loop.seat48.05.bvh"]
+
+[[hub_loop]]
+id = "seat.bench.loop.fidget.seat48"  # takes .00.. = Kimodo takes 04, 00, 07, 03
+hub = "sit.bench"
+clip = ["sit1/_kimodo/seat.bench.fidget/loop/seat.bench.fidget.loop.seat48.04.bvh", "sit1/_kimodo/seat.bench.fidget/loop/seat.bench.fidget.loop.seat48.00.bvh", "sit1/_kimodo/seat.bench.fidget/loop/seat.bench.fidget.loop.seat48.07.bvh", "sit1/_kimodo/seat.bench.fidget/loop/seat.bench.fidget.loop.seat48.03.bvh"]
+
+# --- seat.floor at seat14: stand.idle <-> sit.floor ---------------------------------------------------
+
+[[link]]
+id = "seat.floor.enter.front.seat14"
+from = "hub:stand.idle"
+to = "hub:sit.floor"
+placement = "feet"
+variants = [{ tokens = [12, 16] }, { tokens = [12, 16] }, { tokens = 16 }, { tokens = [10, 16], placement = { dz = 0.08 } }]
+
+[[link]]
+id = "seat.floor.enter.left.seat14"
+from = "hub:stand.idle"
+to = "hub:sit.floor"
+tokens = [12, 16]
+variants = [{ placement = { dx = 0.10, dz = 0.45, dyaw = 90 } }, { placement = { dx = 0.20, dz = 0.40, dyaw = 90 } }, { placement = { dx = 0.0, dz = 0.35, dyaw = 90 } }, { tokens = 16, placement = { dx = 0.10, dz = 0.45, dyaw = 90 } }]
+
+[[link]]
+id = "seat.floor.exit.front.seat14"
+from = "hub:sit.floor"
+to = "hub:stand.idle"
+placement = "feet"
+variants = [{ tokens = [12, 16] }, { tokens = [12, 16] }, { tokens = 16 }, { tokens = [10, 16], placement = { dz = -0.08 } }]
+
+[[link]]
+id = "seat.floor.exit.left.seat14"
+from = "hub:sit.floor"
+to = "hub:stand.idle"
+tokens = [12, 16]
+variants = [{ placement = { dx = 0.45, dz = -0.10, dyaw = 90 } }, { placement = { dx = 0.40, dz = -0.20, dyaw = 90 } }, { placement = { dx = 0.35, dz = 0.0, dyaw = 90 } }, { tokens = 16, placement = { dx = 0.45, dz = -0.10, dyaw = 90 } }]
+
+[[hub_loop]]
+id = "seat.floor.loop.rest.seat14"  # takes .00.. = Kimodo takes 00, 01, 05, 03
+hub = "sit.floor"
+clip = ["sit1/_kimodo/seat.floor.rest/loop/seat.floor.rest.loop.seat14.00.bvh", "sit1/_kimodo/seat.floor.rest/loop/seat.floor.rest.loop.seat14.01.bvh", "sit1/_kimodo/seat.floor.rest/loop/seat.floor.rest.loop.seat14.05.bvh", "sit1/_kimodo/seat.floor.rest/loop/seat.floor.rest.loop.seat14.03.bvh"]
+
+[[hub_loop]]
+id = "seat.floor.loop.fidget.seat14"  # takes .00.. = Kimodo takes 04, 00, 01, 05
+hub = "sit.floor"
+clip = ["sit1/_kimodo/seat.floor.fidget/loop/seat.floor.fidget.loop.seat14.04.bvh", "sit1/_kimodo/seat.floor.fidget/loop/seat.floor.fidget.loop.seat14.00.bvh", "sit1/_kimodo/seat.floor.fidget/loop/seat.floor.fidget.loop.seat14.01.bvh", "sit1/_kimodo/seat.floor.fidget/loop/seat.floor.fidget.loop.seat14.05.bvh"]
+
+# --- seat.chair.old at seat48: stand.idle@old <-> sit.chair@old ---------------------------------------
+
+[[link]]
+id = "seat.chair.old.enter.front.seat48"
+from = "hub:stand.idle@old"
+to = "hub:sit.chair@old"
+placement = "feet"
+variants = [{ tokens = [8, 14] }, { tokens = [12, 16] }, { tokens = 16 }, { tokens = [10, 16], placement = { dz = 0.08 } }]
+
+[[link]]
+id = "seat.chair.old.enter.left.seat48"
+from = "hub:stand.idle@old"
+to = "hub:sit.chair@old"
+tokens = [12, 16]
+variants = [{ placement = { dx = 0.10, dz = 0.45, dyaw = 90 } }, { placement = { dx = 0.20, dz = 0.40, dyaw = 90 } }, { placement = { dx = 0.0, dz = 0.35, dyaw = 90 } }, { tokens = 16, placement = { dx = 0.10, dz = 0.45, dyaw = 90 } }]
+
+[[link]]
+id = "seat.chair.old.exit.front.seat48"
+from = "hub:sit.chair@old"
+to = "hub:stand.idle@old"
+placement = "feet"
+variants = [{ tokens = [8, 14] }, { tokens = [12, 16] }, { tokens = 16 }, { tokens = [10, 16], placement = { dz = -0.08 } }]
+
+[[link]]
+id = "seat.chair.old.exit.left.seat48"
+from = "hub:sit.chair@old"
+to = "hub:stand.idle@old"
+tokens = [12, 16]
+variants = [{ placement = { dx = 0.45, dz = -0.10, dyaw = 90 } }, { placement = { dx = 0.40, dz = -0.20, dyaw = 90 } }, { placement = { dx = 0.35, dz = 0.0, dyaw = 90 } }, { tokens = 16, placement = { dx = 0.45, dz = -0.10, dyaw = 90 } }]
+
+[[hub_loop]]
+id = "seat.chair.old.loop.rest.seat48"  # takes .00.. = Kimodo takes 00, 04, 06
+hub = "sit.chair@old"
+clip = ["sit1/_kimodo/seat.chair.old.rest/loop/seat.chair.old.rest.loop.seat48.00.bvh", "sit1/_kimodo/seat.chair.old.rest/loop/seat.chair.old.rest.loop.seat48.04.bvh", "sit1/_kimodo/seat.chair.old.rest/loop/seat.chair.old.rest.loop.seat48.06.bvh"]
+
+[[hub_loop]]
+id = "seat.chair.old.loop.fidget.seat48"  # takes .00.. = Kimodo takes 03, 05
+hub = "sit.chair@old"
+clip = ["sit1/_kimodo/seat.chair.old.fidget/loop/seat.chair.old.fidget.loop.seat48.03.bvh", "sit1/_kimodo/seat.chair.old.fidget/loop/seat.chair.old.fidget.loop.seat48.05.bvh"]

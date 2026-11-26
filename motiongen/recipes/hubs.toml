@@ -28,3 +28,55 @@ body = "sit.chair"
 hands = { L = "empty", R = "empty" }
 source = "tier1/sit.chair.rest/loop/sit.chair.rest.loop.seat48.00.bvh"  # seated, hands on thighs, 0.53 m pelvis
 frame = 120
+
+# --- AN26a (sit1): provisional: auto-picked by grade, owner keep pending (ANIM-9). Source = the best-graded rest take
+# in its family-band's Hips-height window (ungated, best skate + jerk p99 rank), frame = the calmest ~0.3 s in its
+# middle third (least summed joint speed). sit.chair stays the tier1 row above (the chair at seat48).
+
+[[hub]]
+id = "sit.stool"
+family = "stool"
+body = "sit.stool"
+hands = { L = "empty", R = "empty" }
+source = "sit1/_kimodo/seat.stool.high.rest/loop/seat.stool.high.rest.loop.seat64.04.bvh"  # seat64 band; Hips 0.585 m, ~6 cm below the 0.64 top + offset (Kimodo seats no higher, 2 passes)
+frame = 143
+
+[[hub]]
+id = "sit.chair.seat54"
+family = "chair"
+body = "sit.chair.seat54"
+hands = { L = "empty", R = "empty" }
+source = "sit1/_kimodo/seat.chair.rest/loop/seat.chair.rest.loop.seat54.04.bvh"  # chair at the second band (seat54): own hub, Hips 0.569 m
+frame = 105
+
+[[hub]]
+id = "sit.bench"
+family = "bench"
+body = "sit.bench"
+hands = { L = "empty", R = "empty" }
+source = "sit1/_kimodo/seat.bench.rest/loop/seat.bench.rest.loop.seat48.01.bvh"  # seat48 band, Hips 0.529 m
+frame = 157
+
+[[hub]]
+id = "sit.floor"
+family = "floor"
+body = "sit.floor"
+hands = { L = "empty", R = "empty" }
+source = "sit1/_kimodo/seat.floor.rest/loop/seat.floor.rest.loop.seat14.00.bvh"  # seat14 band; the takes sit on the floor itself, Hips 0.104 m
+frame = 136
+
+[[hub]]
+id = "sit.chair@old"
+family = "chair"
+body = "sit.chair@old"
+hands = { L = "empty", R = "empty" }
+source = "sit1/_kimodo/seat.chair.old.rest/loop/seat.chair.old.rest.loop.seat48.00.bvh"  # style old, seat48 band, Hips 0.523 m
+frame = 126
+
+[[hub]]
+id = "stand.idle@old"
+family = "any"
+body = "stand.idle@old"
+hands = { L = "empty", R = "empty" }
+source = "sit1/_kimodo/stand.idle.old/loop/stand.idle.old.loop.ground0.01.bvh"  # style old standing idle
+frame = 99

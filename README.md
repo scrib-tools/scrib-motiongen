@@ -163,6 +163,13 @@ clip = "tier1/sit.chair.rest/loop/sit.chair.rest.loop.seat48.00.bvh"   # its las
 tokens = 6                            # default 6 (18 frames, the shortest)
 ```
 
+**Hub loops (AN26a, `[[hub_loop]] id, hub = "<hub id>", clip = "<take.bvh>"` or a list of takes, tokens default [6, 10]):**
+a loop take made exact on a hub, one joined take per clip (x variants, numbered in order, so a list is one prompt group):
+link hub -> clip start (the clip turned to the hub's heading, its pelvis XZ on the hub's), the clip, link clip end -> the
+hub where the take started (no placement: the link absorbs the clip's drift, so the loop closes in place). First and last
+frame = the hub pose; `.prov.json` has `from_hub` = `to_hub`, `parts` (frame ranges of link_in / clip / link_out) and
+both links' corrections; `.contacts.json` is null over the clip frames.
+
 Hub sources and relative clip paths resolve against `--hub-root` (default `--out`). Placement turns the target to the
 context's heading (ankles-to-toes vector) and then puts the target's mean ankle XZ (`feet`: planted feet, e.g.
 stand <-> sit) or pelvis XZ (`root`, and loop seams) on the context's; `{dx, dz, dyaw}` is `feet`, then moved dx to the

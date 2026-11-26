@@ -348,10 +348,100 @@ def run_job(job: LinkJob, worker, sources: Sources, out: Path, hand_mode: str = 
     return stats
 
 
+def _segment(worker, ctx: tuple, tgt: tuple, tokens: tuple[int, ...], hand_mode: str, corrected: tuple[str, ...]) -> dict:
+    """One MotionBricks segment ctx -> tgt (corrected take, raw miss, determinism repeat, hand step), as run_job."""
+    ctx_mb, tgt_mb = worker.to_mb(*ctx), worker.to_mb(*tgt)
+    raw, _, raw_ms = worker.generate(ctx_mb, tgt_mb, tokens, correct=False)
+    poses, contacts, ms = worker.generate(ctx_mb, tgt_mb, tokens, correct=True)
+    again, _, _ = worker.generate(ctx_mb, tgt_mb, tokens, correct=True)
+    local, root = worker.from_mb(poses)
+    local = apply_hand_mode(local, ctx[0][-1], tgt[0][0], hand_mode)
+    rl, rr = worker.from_mb(raw)
+    return {"local": local, "root": root, "contacts": contacts, "ms": ms, "raw_ms": raw_ms,
+            "deterministic": bool(again.shape == poses.shape and np.abs(again - poses).max() < 1e-5),
+            "corr_start": body_error(rl[0], rr[0], ctx[0][-1], ctx[1][-1], corrected),
+            "corr_end": body_error(rl[-1], rr[-1], tgt[0][0], tgt[1][0], corrected),
+            "pj_start": joint_errors(rl[0], ctx[0][-1]), "pj_end": joint_errors(rl[-1], tgt[0][0]), "raw_frames": len(rl)}
+
+
+def run_hub_loop(job: LinkJob, worker, sources: Sources, out: Path, hand_mode: str = "slerp") -> dict:
+    """AN26a hub loop: a loop take made exact on its hub, one joined take = link in + the clip + link out.
+
+    Link in: context = the hub (its source's 4 frames up to the hub frame), target = the clip's first frames, the whole
+    clip turned to the hub's heading with its pelvis XZ on the hub's (`root` placement). Link out: context = the placed
+    clip's last 4 frames, target = the hub frames exactly where the take started (no placement: the link absorbs the
+    clip's drift, so the loop closes in place). Joined = in + clip[1:] + out[1:] (the shared end frames once); first and
+    last frame = the hub pose, the hub's pelvis XZ and heading at both ends."""
+    t0 = time.perf_counter()
+    hl, hr, hpath = sources.clip(job.src)
+    cl, cr, cpath = sources.clip(job.dst)
+    h = Sources.frame_of(job.src, len(hl))
+    ci = [max(0, h - POSES_PER_TOKEN + 1 + i) for i in range(POSES_PER_TOKEN)]
+    hi = [min(len(hl) - 1, h + i) for i in range(job.target_poses)]
+    hub_ctx, hub_tgt = (hl[ci], hr[ci]), (hl[hi], hr[hi])
+    pl, pr = place_target(hub_ctx, (cl, cr), "root")  # the whole clip, placed against the hub
+    names = soma.rest()["names"]
+    hands = {names[i] for i in hand_joints()} if hand_mode == "slerp" else set()
+    corrected = tuple(j for j in BODY_JOINTS if j not in hands)
+    a = _segment(worker, hub_ctx, (pl[: job.target_poses], pr[: job.target_poses]), job.tokens, hand_mode, corrected)
+    tail = [len(pl) - POSES_PER_TOKEN + i for i in range(POSES_PER_TOKEN)]
+    b = _segment(worker, (pl[tail], pr[tail]), hub_tgt, job.tokens, hand_mode, corrected)
+    local = np.concatenate([a["local"], pl[1:], b["local"][1:]])
+    root = np.concatenate([a["root"], pr[1:], b["root"][1:]])
+    bvh, prov_path = job.outputs(out)
+    bvh.parent.mkdir(parents=True, exist_ok=True)
+    soma.write_bvh(bvh, local, root, MB_FPS)
+    na, nb = len(a["local"]), len(b["local"])
+    stats = {
+        "frames": len(local), "seconds": round(len(local) / MB_FPS, 3),
+        "tokens": [(na + TRIM_FRAMES) // POSES_PER_TOKEN, (nb + TRIM_FRAMES) // POSES_PER_TOKEN],
+        "parts": {"link_in": [0, na - 1], "clip": [na - 1, na + len(pl) - 2], "link_out": [na + len(pl) - 2, len(local) - 1]},
+        "start_error": body_error(local[0], root[0], hl[h], hr[h]),
+        "end_error": body_error(local[-1], root[-1], hl[h], hr[h]),
+        "correction": {"start": a["corr_start"], "end": b["corr_end"],
+                       "inner": {"in_end": a["corr_end"], "out_start": b["corr_start"]},
+                       "joints": "body without the slerped wrists" if hands else "body",
+                       "per_joint": {"start": a["pj_start"], "end": b["pj_end"]},
+                       "raw_frames": [a["raw_frames"], b["raw_frames"]]},
+        "wrist_speed_max_deg_s": wrist_speed_max(local, MB_FPS),
+        "deterministic": a["deterministic"] and b["deterministic"],
+        "generate_ms": round(a["ms"] + b["ms"], 2), "raw_generate_ms": round(a["raw_ms"] + b["raw_ms"], 2),
+    }
+    prov = {
+        "tool": "motiongen", "tool_version": TOOL_VERSION, **worker.provenance,
+        "date": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+        "id": job.stem(), "link": job.id, "kind": job.kind, "take": job.take,
+        "from_hub": job.src.hub, "to_hub": job.src.hub, "hub_source": {"path": str(hpath), "frame": h},
+        "clip": {"path": str(cpath), "frames": len(cl)},
+        "context_frames": ci, "target_frames": hi, "target_poses": job.target_poses,
+        "allowed_tokens": list(job.tokens), "placement": "hub_loop (clip: root on the hub; hub: at the start)",
+        "endpoint_correction": True, "hand_mode": hand_mode,
+        **({"hand_slerp": {"joints": len(hands), "roots": list(WRISTS), "ease": "smoothstep",
+                           "from": "last context pose", "to": "first target pose", "per": "link"}} if hands else {}),
+        **stats,
+        "recipe": job.source,
+        "bvh": {"skeleton": "somaskel77", "units": "cm", "up": "+Y", "rest_pose": "standard T-pose",
+                "hips_translation": "absolute (cm); the Hips OFFSET is a dummy (0,100,0)"},
+        "contacts": bvh.with_suffix(".contacts.json").name,
+        "reproduce": "same hub, clip, allowed_tokens, model precision (deterministic: see field)",
+    }
+    nc = len(pl) - 1
+    contacts = np.concatenate([a["contacts"], np.full((nc, a["contacts"].shape[1]), np.nan), b["contacts"][1:]])
+    bvh.with_suffix(".contacts.json").write_text(json.dumps({
+        "columns": ["heel_l", "toe_l", "heel_r", "toe_r"], "fps": MB_FPS, "clip_frames": "null (no MotionBricks contacts)",
+        "contacts": [[None if np.isnan(x) else round(float(x), 3) for x in r] for r in contacts]}), encoding="utf-8")
+    tmp = prov_path.with_name(prov_path.name + ".tmp")
+    tmp.write_text(json.dumps(prov, indent=2), encoding="utf-8")
+    os.replace(tmp, prov_path)
+    stats["wall_ms"] = round((time.perf_counter() - t0) * 1e3, 1)
+    return stats
+
+
 def _row(job: LinkJob, s: dict) -> str:
     c = s["correction"]
     e = lambda d: f"{d['rot_max_deg']:.2f}/{d['root_cm']:.2f}"
-    return (f"| {job.stem()} | {job.src.label()} -> {job.dst.label()} | {s['frames']} ({s['tokens']}t) | "
+    tok = "+".join(map(str, s["tokens"])) if isinstance(s["tokens"], list) else s["tokens"]
+    return (f"| {job.stem()} | {job.src.label()} -> {job.dst.label()} | {s['frames']} ({tok}t) | "
             f"{e(s['start_error'])} | {e(s['end_error'])} | {c['start']['rot_max_deg']:.1f} {c['start']['joint']} / "
             f"{c['start']['root_cm']:.1f} | {c['end']['rot_max_deg']:.1f} {c['end']['joint']} / {c['end']['root_cm']:.1f} | "
             f"{s['generate_ms']:.1f} | {'yes' if s['deterministic'] else 'NO'} |")
@@ -379,7 +469,7 @@ def cmd_link(args) -> int:
             "correction end deg joint / cm | ms | deterministic |", "|---|---|---|---|---|---|---|---|---|"]
     try:
         for i, job in enumerate(todo):
-            s = run_job(job, worker, sources, out, args.hand_mode)
+            s = (run_hub_loop if job.kind == "hub_loop" else run_job)(job, worker, sources, out, args.hand_mode)
             rec = {"ts": dt.datetime.now().isoformat(timespec="seconds"), "job": job.stem(), "kind": job.kind,
                    "from": job.src.label(), "to": job.dst.label(), **s}
             with (out / "jobs.jsonl").open("a", encoding="utf-8") as f:
@@ -396,7 +486,7 @@ def cmd_link(args) -> int:
 
 def add_parser(sub) -> None:
     p = sub.add_parser("link", help="MotionBricks link pieces (approach, loop seams, exit) between given poses (MG8)")
-    p.add_argument("recipes", nargs="+", help="link recipe TOML files ([[link]] / [[loop_seam]] tables)")
+    p.add_argument("recipes", nargs="+", help="link recipe TOML files ([[link]] / [[loop_seam]] / [[hub_loop]] tables)")
     p.add_argument("--out", required=True, help="output root; takes go to <out>/<id>/<id>.<nn>.bvh")
     p.add_argument("--hub-root", help="root that relative hub sources and clip paths resolve against (default --out)")
     p.add_argument("--only", action="append", help="link id glob (repeatable)")

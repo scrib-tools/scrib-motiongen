@@ -1,0 +1,159 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# AN26a sit/stand batch 1, Kimodo half: the seated loops (rest, fidget) per seat family-band, and an old standing idle
+# (the `stand.idle@old` hub source). Contract: Scrib motion-generation.md "Interaction families (AN25)" (seat family:
+# enter.front, enter.left, loop x2, exit.front, exit.left; enter/exit are MotionBricks links, recipes/sit-batch1-links.toml).
+# Run with --out "<scrib>/animation packs/generated/sit1": its bands.json gives one point kind per seat family
+# (floor seat14, chair seat48 + seat54, bench seat48, stool seat64, old chair seat48; heights from the MG4 census).
+# Pelvis at band + 0.10 like tier1's sit.chair.rest (the sit.chair hub source: 0.53 m pelvis at seat48).
+# Loops are not hub-constrained here (their hubs are picked from these takes); the link recipe makes the kept loops
+# start and end exactly on their hub (`[[hub_loop]]`). 8 seeds each (spec: 8 seeds per piece).
+
+# --- rest: calm, low motion (hub sources) -----------------------------------------------------------------------------
+
+[[activity]]
+id = "seat.stool.rest"
+point = "seat_stool"
+phases = ["loop"]
+variants = 8
+duration = 8.0
+prompt = "A person sitting upright on a tall stool without a backrest, both feet flat on the floor and hands resting on their thighs, rests calmly, breathing slowly and glancing around."
+constraints.loop = { pelvis_height = "band.seat_stool+0.10", root = "fixed" }
+
+[[activity]]
+id = "seat.chair.rest"
+point = "seat_chair"
+phases = ["loop"]
+variants = 8
+duration = 8.0
+prompt = "A person sitting on a chair with both feet flat on the floor and hands resting on their thighs rests calmly, breathing slowly and glancing around."
+constraints.loop = { pelvis_height = "band.seat_chair+0.10", root = "fixed" }
+
+[[activity]]
+id = "seat.bench.rest"
+point = "seat_bench"
+phases = ["loop"]
+variants = 8
+duration = 8.0
+prompt = "A person sitting on a wooden bench with both feet flat on the floor and hands resting on their knees rests calmly, breathing slowly and looking around."
+constraints.loop = { pelvis_height = "band.seat_bench+0.10", root = "fixed" }
+
+[[activity]]
+id = "seat.floor.rest"
+point = "seat_floor"
+phases = ["loop"]
+variants = 8
+duration = 8.0
+prompt = "A person sitting cross-legged on a low cushion on the floor with hands resting on their knees rests calmly, breathing slowly and looking around."
+constraints.loop = { pelvis_height = "band.seat_floor+0.10", root = "fixed" }
+
+[[activity]]
+id = "seat.chair.old.rest"
+point = "seat_chair_old"
+phases = ["loop"]
+variants = 8
+duration = 8.0
+prompt = "An old, frail person sitting hunched on a chair with both feet on the floor and hands resting on their thighs rests wearily, breathing slowly."
+constraints.loop = { pelvis_height = "band.seat_chair_old+0.10", root = "fixed" }
+
+# --- fidget: the second loop per family-band ---------------------------------------------------------------------------
+
+[[activity]]
+id = "seat.stool.fidget"
+point = "seat_stool"
+phases = ["loop"]
+variants = 8
+duration = 8.0
+prompt = "A person sitting on a tall stool without a backrest fidgets, shifting their weight, scratching their arm, rubbing their knee and looking around, then settles with hands on their thighs."
+constraints.loop = { pelvis_height = "band.seat_stool+0.10", root = "fixed" }
+
+[[activity]]
+id = "seat.chair.fidget"
+point = "seat_chair"
+phases = ["loop"]
+variants = 8
+duration = 8.0
+prompt = "A person sitting on a chair fidgets, shifting their weight, scratching their arm, rubbing their knee and looking around, then settles with hands on their thighs."
+constraints.loop = { pelvis_height = "band.seat_chair+0.10", root = "fixed" }
+
+[[activity]]
+id = "seat.bench.fidget"
+point = "seat_bench"
+phases = ["loop"]
+variants = 8
+duration = 8.0
+prompt = "A person sitting on a wooden bench fidgets, shifting their weight, stretching their back, rubbing their hands together and looking around, then settles with hands on their knees."
+constraints.loop = { pelvis_height = "band.seat_bench+0.10", root = "fixed" }
+
+[[activity]]
+id = "seat.floor.fidget"
+point = "seat_floor"
+phases = ["loop"]
+variants = 8
+duration = 8.0
+prompt = "A person sitting cross-legged on a low cushion on the floor fidgets, shifting their weight, stretching their back, scratching their arm and looking around, then settles with hands on their knees."
+constraints.loop = { pelvis_height = "band.seat_floor+0.10", root = "fixed" }
+
+[[activity]]
+id = "seat.chair.old.fidget"
+point = "seat_chair_old"
+phases = ["loop"]
+variants = 8
+duration = 8.0
+prompt = "An old, frail person sitting hunched on a chair slowly rubs their aching knee, shifts their weight and coughs, then settles with hands on their thighs."
+constraints.loop = { pelvis_height = "band.seat_chair_old+0.10", root = "fixed" }
+
+# --- old standing idle (stand.idle@old hub source) ----------------------------------------------------------------------
+
+[[activity]]
+id = "stand.idle.old"
+point = "ground"
+phases = ["loop"]
+variants = 8
+duration = 5.0
+prompt = "An old, frail person stands still with a slightly hunched back and arms hanging at their sides, breathing slowly."
+constraints.loop = { root = "fixed" }
+
+# --- second pass: seat height (pass 1 measured the Hips at 0.53-0.57 m on every chair band, 0.12-0.14 m (on the
+# floor) for the stool rest, 0.56-0.63 m for the stool fidget: the pelvis_height key alone does not lift the body).
+# Same targets, constraint guidance raised (cfg_weight [text, constraint], Kimodo default [2, 2]) and the stool
+# prompts name the high seat. Run with --only 'seat.*.high.*'.
+
+[[activity]]
+id = "seat.stool.high.rest"
+point = "seat_stool"
+phases = ["loop"]
+variants = 8
+duration = 8.0
+cfg_weight = [2.0, 5.0]
+prompt = "A person perched on a high bar stool, hips high above their knees and legs slanting down to the floor, hands resting on their thighs, rests calmly, breathing slowly and glancing around."
+constraints.loop = { pelvis_height = "band.seat_stool+0.10", root = "fixed" }
+
+[[activity]]
+id = "seat.stool.high.fidget"
+point = "seat_stool"
+phases = ["loop"]
+variants = 8
+duration = 8.0
+cfg_weight = [2.0, 5.0]
+prompt = "A person perched on a high bar stool, hips high above their knees and legs slanting down to the floor, fidgets, shifting their weight, scratching their arm and looking around, then settles with hands on their thighs."
+constraints.loop = { pelvis_height = "band.seat_stool+0.10", root = "fixed" }
+
+[[activity]]
+id = "seat.chair.high.rest"
+point = "seat_chair"
+phases = ["loop"]
+variants = 8
+duration = 8.0
+cfg_weight = [2.0, 5.0]
+prompt = "A person sitting on a chair with both feet flat on the floor and hands resting on their thighs rests calmly, breathing slowly and glancing around."
+constraints.loop = { pelvis_height = "band.seat_chair+0.10", root = "fixed" }
+
+[[activity]]
+id = "seat.chair.high.fidget"
+point = "seat_chair"
+phases = ["loop"]
+variants = 8
+duration = 8.0
+cfg_weight = [2.0, 5.0]
+prompt = "A person sitting on a chair fidgets, shifting their weight, scratching their arm, rubbing their knee and looking around, then settles with hands on their thighs."
+constraints.loop = { pelvis_height = "band.seat_chair+0.10", root = "fixed" }

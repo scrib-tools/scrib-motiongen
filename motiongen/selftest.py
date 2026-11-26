@@ -384,7 +384,7 @@ def profile_checks(check, bands) -> None:
 
 def hub_checks(check, bands) -> None:
     real = load_hubs(DEFAULT_HUBS)
-    check(set(real) == {"stand.idle", "sit.chair"} and real["sit.chair"].family == "chair"
+    check({"stand.idle", "sit.chair", "sit.stool", "sit.chair.seat54", "sit.bench", "sit.floor", "sit.chair@old", "stand.idle@old"} == set(real) and real["sit.chair"].family == "chair" and real["sit.chair@old"].body == "sit.chair@old"
           and real["stand.idle"].hands == {"L": "empty", "R": "empty"} and all(h.source.endswith(".bvh") for h in real.values()),
           f"recipes/hubs.toml: {len(real)} hubs parse ({', '.join(sorted(real))})")
     root = os.environ.get("MOTIONGEN_HUB_ROOT")
@@ -465,6 +465,10 @@ def link_checks(check) -> None:
           and by["seam.sit.chair.rest.00"].tokens == (6,) and by["seam.sit.chair.rest.00"].placement == "seam"
           and by["link.seat.chair.exit.00"].src.hub == "sit.chair" and by["link.seat.chair.exit.00"].dst.hub == "stand.idle",
           f"links-spike.toml: {len(jobs)} link takes plan (enter x2 token ranges, exit, loop seam)")
+    sit = plan_links(load_links([HERE / "recipes" / "sit-batch1-links.toml"]), Path("gen"))
+    kinds = {k: sum(j.kind == k for j in sit) for k in ("link", "hub_loop")}
+    check(kinds["link"] == 96 and kinds["hub_loop"] >= 6,
+          f"sit-batch1-links.toml (AN26a): {kinds['link']} enter/exit takes + {kinds['hub_loop']} hub loops plan")
     row = link_plan_line(by["link.seat.chair.enter.00"])
     check(" hub:stand.idle -> hub:sit.chair  tokens 8-14 (26-50f) placement feet target_poses 4" in row, f"link plan line: {row.strip()}")
     seam = by["seam.sit.chair.rest.00"]
@@ -693,6 +697,42 @@ def hand_checks(check, d: Path, clip: Path) -> None:
           and any(x.startswith("| t.hand.00 | slerp |") for x in rows) and rr["link"]["wrist_deg_s"]["l"] > 0,
           f"hubcheck on the slerp take: ends 0/0 deg, link row with hand mode + wrist speed {rr.get('link', {}).get('wrist_deg_s')}")
 
+    # AN26a hub loop (fake engine): link hub -> clip start + the clip + link clip end -> the same hub, one take
+    from .hubs import Hub
+    from .link_worker import run_hub_loop
+    loop_clip = d / "loop_clip.bvh"
+    ll = soma.quat_to_mat(rng.normal(size=(12, 77, 4)) + [0.0, 0.0, 0.0, 3.0])
+    lr = np.tile([1.5, 0.6, -2.0], (12, 1)) + np.linspace(0, 0.05, 12)[:, None]  # elsewhere, drifting 5 cm
+    soma.write_bvh(loop_clip, ll, lr, 30.0)
+    hub = Hub("sit.test", "test", "sit.test", {"L": "empty", "R": "empty"}, clip.as_posix(), 3, "<t>")
+    hl, hr = soma.read_soma_bvh(clip)[:2]
+    job = plan_links(parse_links_text(f'[[hub_loop]]\nid = "t.loop"\nhub = "sit.test"\nclip = "{loop_clip.as_posix()}"\n'
+                                      'tokens = 6\n', "<t>", {"sit.test": hub}), d)[0]
+    run_hub_loop(job, FakeLinkWorker(), src, d / "hub_loop", "slerp")
+    bvh, prov = job.outputs(d / "hub_loop")
+    jl, jr = soma.read_soma_bvh(bvh)[:2]
+    pv = json.loads(prov.read_text(encoding="utf-8"))
+    ends = max(float(soma.angle_deg(jl[i], hl[3]).max()) for i in (0, -1))
+    check(job.kind == "hub_loop" and len(jl) == 18 + 11 + 17 and ends < 1e-2
+          and np.abs(jr[0] - hr[3]).max() < 1e-6 and np.abs(jr[-1] - hr[3]).max() < 1e-6
+          and pv["from_hub"] == pv["to_hub"] == "sit.test" and pv["parts"]["clip"] == [17, 28],
+          f"hub_loop: 18 + 11 + 17 frames joined, both ends = the hub pose at the hub's root ({ends:.1e} deg), "
+          "from_hub = to_hub")
+    hc = hubcheck_dir(d / "hub_loop", {"sit.test": hub}, d).get("t.loop.00", {})
+    check(hc.get("start", {}).get("rot_max_deg", 1) < 1e-2 and hc.get("end", {}).get("rot_max_deg", 1) < 1e-2,
+          f"hubcheck on the hub loop: ends {hc.get('start', {}).get('rot_max_deg')}/{hc.get('end', {}).get('rot_max_deg')} deg")
+    many = plan_links(parse_links_text('[[hub_loop]]\nid = "a.b"\nhub = "sit.test"\nclip = ["x/a.bvh", "x/b.bvh"]\n'
+                                       'variants = [{}, { tokens = 8 }]\n', "<t>", {"sit.test": hub}), d)
+    check([(j.stem(), Path(j.dst.path).name, j.tokens[0]) for j in many]
+          == [("a.b.00", "a.bvh", 6), ("a.b.01", "a.bvh", 8), ("a.b.02", "b.bvh", 6), ("a.b.03", "b.bvh", 8)],
+          "hub_loop clip list: one take per clip x variant, numbered in order (one prompt group)")
+    try:
+        parse_links_text('[[hub_loop]]\nid = "a.b"\nhub = "sit.test"\nclip = "x.bvh"\nvariants = [{ placement = "feet" }]\n',
+                         "<bad>", {"sit.test": hub})
+        check(False, "hub_loop rejects a placement")
+    except RecipeError as e:
+        check("placement is fixed" in str(e), f"hub_loop rejects a placement: {str(e)[:80]}")
+
 
 def hub_pose_smoke(check, bands) -> None:
     """CPU smoke test of `kimodo_backend.build_constraints` with start + end poses from a written SOMA-77 BVH."""
@@ -769,8 +809,10 @@ def main() -> int:
         fails += 0 if cond else 1
 
     bands = load_bands(HERE / "default_bands.json")
-    check(bands.placeholder and set(bands.points) == {"seat", "table", "counter", "bed", "ground"}, "default_bands.json: 5 placeholder kinds")
-    recipes = sorted(p for p in (HERE / "recipes").glob("*.toml") if p.name != "hubs.toml" and not p.name.startswith("links-"))
+    seat_families = {"seat_floor", "seat_chair", "seat_bench", "seat_stool", "seat_chair_old"}  # AN26a sit-batch1
+    check(bands.placeholder and set(bands.points) == {"seat", "table", "counter", "bed", "ground"} | seat_families,
+          "default_bands.json: 5 placeholder kinds + 5 seat family kinds")
+    recipes = sorted(p for p in (HERE / "recipes").glob("*.toml") if p.name != "hubs.toml" and not p.name.startswith("links-") and not p.name.endswith("-links.toml"))
     acts = load_recipes(recipes)
     jobs = plan(acts, bands)
     check(len(acts) >= 3, f"{len(recipes)} recipe files, {len(acts)} activities parse")
