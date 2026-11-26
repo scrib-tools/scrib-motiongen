@@ -580,6 +580,119 @@ def link_checks(check) -> None:
               and r.get("from_hub") == "clip.bvh#2" and any("4.5 RightHand / 1.0" in x for x in rows),
               "hubcheck: link ends on clip frames measured (0 deg / 0 cm), correction table row")
 
+        hand_checks(check, Path(d), clip)
+
+
+class FakeLinkWorker:
+    """CPU stand-in for `MotionBricksWorker` (MG8b selftest): poses stay T-pose locals (p xyz at the root, q xyzw);
+    a 'generation' = seeded random rotations per frame and joint, the corrected one with its ends set to the last
+    context pose and the first target pose (all joints, like MotionBricks' endpoint correction)."""
+
+    provenance = {"worker": "fake"}
+
+    def to_mb(self, local, root):
+        import numpy as np
+
+        from . import soma
+        p = np.zeros(local.shape[:2] + (3,))
+        p[:, 0] = root
+        return np.concatenate([p, soma.mat_to_quat(local)], -1)
+
+    def from_mb(self, poses):
+        from . import soma
+        return soma.quat_to_mat(poses[..., 3:]), poses[:, 0, :3].copy()
+
+    def generate(self, ctx, tgt, tokens, correct):
+        import numpy as np
+
+        n = 4 * tokens[0] - 6
+        rng = np.random.default_rng(11)
+        q = rng.normal(size=(n, ctx.shape[1], 4))
+        q[..., 3] += 3.0
+        q /= np.linalg.norm(q, axis=-1, keepdims=True)
+        poses = np.concatenate([np.zeros((n, ctx.shape[1], 3)), q], -1)
+        poses[:, 0, :3] = np.linspace(ctx[-1, 0, :3], tgt[0, 0, :3], n)
+        if correct:
+            poses[0], poses[-1] = ctx[-1], tgt[0]
+            self.corrected = poses.copy()
+        return poses, np.zeros((n, 4)), 1.0
+
+
+def _slerp_reference(a, b, w):
+    """Independent rotation slerp a @ exp(w log(a^T b)) by matrix log + Rodrigues (selftest reference)."""
+    import numpy as np
+
+    r = a.T @ b
+    th = math.acos(max(-1.0, min(1.0, (np.trace(r) - 1.0) / 2.0)))
+    if th < 1e-12:
+        return a.copy()
+    k = np.array([r[2, 1] - r[1, 2], r[0, 2] - r[2, 0], r[1, 0] - r[0, 1]]) / (2.0 * math.sin(th))
+    K = np.array([[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]])
+    t = w * th
+    return a @ (np.eye(3) + math.sin(t) * K + (1.0 - math.cos(t)) * K @ K)
+
+
+def hand_checks(check, d: Path, clip: Path) -> None:
+    """MG8b hand step on a synthetic piece: wrists + fingers = the slerp, body untouched, ends exact, `model` = MG8."""
+    import numpy as np
+
+    from . import soma
+    from .hubcheck import hubcheck_dir, table
+    from .link_worker import WRISTS, Sources, apply_hand_mode, hand_joints, run_job, slerp_hands, smoothstep
+    from .links import parse_links_text, plan_links
+
+    r = soma.rest()
+    hj = hand_joints()
+    names = {r["names"][i] for i in hj}
+    check(len(hj) == 50 and set(WRISTS) <= names and "LeftHandPinkyEnd" in names and "LeftForeArm" not in names,
+          f"hand joints from the SOMA-77 tree: {len(hj)} (2 wrists + 2 x 24 finger joints), no forearm")
+    rng = np.random.default_rng(5)
+    q = rng.normal(size=(20, 77, 4))
+    q[..., 3] += 2.0
+    piece = soma.quat_to_mat(q)
+    a, b = piece[0], piece[-1]
+    out = slerp_hands(piece, a, b)
+    w = smoothstep(np.arange(20) / 19)
+    ref_err = max(np.abs(out[i, j] - _slerp_reference(a[j], b[j], w[i])).max() for i in range(20) for j in hj)
+    body = [i for i in range(77) if i not in set(hj)]
+    check(ref_err < 1e-9 and np.array_equal(out[:, body], piece[:, body])
+          and np.array_equal(out[0, hj], a[hj]) and np.array_equal(out[-1, hj], b[hj]),
+          f"slerp_hands: hand frames = reference slerp ({ref_err:.1e}), body joints untouched, ends exact")
+    check(apply_hand_mode(piece, a, b, "model") is piece, "hand_mode 'model' leaves the model's hands (MG8 output)")
+
+    # the worker step end to end (fake engine): BVH body = the corrected model output, hands = the slerp
+    job = plan_links(parse_links_text(f'[[link]]\nid = "t.hand"\nfrom = "clip:{clip.as_posix()}#end"\n'
+                                      f'to = "clip:{clip.as_posix()}#start"\ntokens = 6\nplacement = "root"\n', "<t>"), d)[0]
+    src = Sources(d)
+    worker = FakeLinkWorker()
+    res = {}
+    for mode in ("model", "slerp"):
+        root_out = d / f"hand_{mode}"
+        run_job(job, worker, src, root_out, mode)
+        bvh, prov = job.outputs(root_out)
+        got = soma.read_soma_bvh(bvh)[0]
+        model_local = worker.from_mb(worker.corrected)[0]
+        res[mode] = (got, model_local, json.loads(prov.read_text(encoding="utf-8")))
+    got, model_local, prov_m = res["model"]
+    check(float(soma.angle_deg(got, model_local).max()) < 1e-3 and prov_m["hand_mode"] == "model"
+          and prov_m["correction"]["joints"] == "body",
+          "run_job hand_mode 'model': BVH = the corrected model output on every joint (MG8)")
+    got, model_local, prov_s = res["slerp"]
+    sl = soma.read_soma_bvh(clip)[0]
+    want = slerp_hands(model_local, sl[-1], sl[0])
+    c = prov_s["correction"]
+    check(float(soma.angle_deg(got, want).max()) < 1e-3 and float(soma.angle_deg(got[:, body], model_local[:, body]).max()) < 1e-3
+          and prov_s["hand_mode"] == "slerp" and prov_s["hand_slerp"]["joints"] == 50
+          and c["start"]["joint"] not in WRISTS and c["end"]["joint"] not in WRISTS and "LeftHand" in c["per_joint"]["end"],
+          "run_job hand_mode 'slerp': hands = slerp(from, to), body = the corrected model output; wrists left out of "
+          "the correction size, kept in per_joint (.prov.json)")
+    hc = hubcheck_dir(d / "hand_slerp", {}, d)
+    rr = hc.get("t.hand.00", {})
+    rows = table(hc)
+    check(rr.get("start", {}).get("rot_max_deg") == 0.0 and rr.get("end", {}).get("rot_max_deg") == 0.0
+          and any(x.startswith("| t.hand.00 | slerp |") for x in rows) and rr["link"]["wrist_deg_s"]["l"] > 0,
+          f"hubcheck on the slerp take: ends 0/0 deg, link row with hand mode + wrist speed {rr.get('link', {}).get('wrist_deg_s')}")
+
 
 def hub_pose_smoke(check, bands) -> None:
     """CPU smoke test of `kimodo_backend.build_constraints` with start + end poses from a written SOMA-77 BVH."""

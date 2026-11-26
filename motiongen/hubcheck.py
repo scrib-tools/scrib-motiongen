@@ -15,6 +15,9 @@ MG8 links and loop seams, which also add a correction-size table); others are sk
 Foot slide: per foot and frame, the horizontal speed of its slowest point (ankle, toe) among those in contact on both
 ends of the step (contact = height under the point's resting height in the take, its 2nd percentile, + 3 cm: grade's
 contact band); mean and p95 over all such foot-frames (cm/s). Rotation channels: `clipstats._rot` (BVH order).
+Link takes (MG8b) also get the hand mode, the forearms' and wrists' raw endpoint miss (larger of the two ends, from the
+provenance's `correction.per_joint`; the wrists' is not applied under `slerp`) and each wrist's largest frame-to-frame
+local rotation as deg/s (from the BVH, so MG8 takes are measured too).
 """
 
 from __future__ import annotations
@@ -120,6 +123,15 @@ def pose_error(take: Take, k: int, hub: Take, h: int) -> dict:
     return out
 
 
+def wrist_speed(t: Take) -> dict[str, float]:
+    """Per wrist: the largest frame-to-frame local rotation over the take (deg/s)."""
+    out = {}
+    for key, n in (("l", "LeftHand"), ("r", "RightHand")):
+        r = t.local[:, t.index[n]]
+        out[key] = round(max((rot_angle_deg(r[i], r[i + 1]) for i in range(len(r) - 1)), default=0.0) * t.fps, 1)
+    return out
+
+
 def foot_slide(t: Take) -> dict:
     """Foot slide over the take (cm/s): mean and p95 of in-contact foot speeds, plus the contact share."""
     speeds: list[np.ndarray] = []
@@ -199,7 +211,13 @@ def check_take(path: Path, prov: dict, hubs: HubFrames) -> dict:
         out["link"] = {"tokens": prov.get("tokens"), "ms": prov.get("generate_ms"),
                        "corr_start_deg": c["start"]["rot_max_deg"], "corr_start_joint": c["start"]["joint"],
                        "corr_start_cm": c["start"]["root_cm"], "corr_end_deg": c["end"]["rot_max_deg"],
-                       "corr_end_joint": c["end"]["joint"], "corr_end_cm": c["end"]["root_cm"]}
+                       "corr_end_joint": c["end"]["joint"], "corr_end_cm": c["end"]["root_cm"],
+                       "hand_mode": prov.get("hand_mode", "model"), "wrist_deg_s": wrist_speed(t)}
+        pj = c.get("per_joint")
+        if isinstance(pj, dict):
+            miss = lambda n: max(pj["start"][n], pj["end"][n])
+            out["link"].update(forearm_deg=[miss("LeftForeArm"), miss("RightForeArm")],
+                               wrist_raw_deg=[miss("LeftHand"), miss("RightHand")])
     return out
 
 
@@ -266,11 +284,17 @@ def table(res: dict) -> list[str]:
             "start_rot_max_deg", "start_worst_cm", "end_rot_max_deg", "end_worst_cm", "slide_p95_cm_s")) + " |")
     links = sorted((k, v["link"]) for k, v in res.items() if not k.startswith("_") and "link" in v)
     if links:
-        rows += ["", "| link take | tokens | correction start deg joint / pelvis cm | correction end deg joint / pelvis cm | ms/segment |",
-                 "|---|---|---|---|---|"]
+        rows += ["", "| link take | hands | tokens | correction start deg joint / pelvis cm | correction end deg joint / pelvis cm | "
+                 "forearm miss L/R deg | wrist miss L/R deg | wrist max L/R deg/s | ms/segment |",
+                 "|---|---|---|---|---|---|---|---|---|"]
+        pair = lambda v: "-" if v is None else f"{v[0]:.1f}/{v[1]:.1f}"
         for stem, s in links:
-            rows.append(f"| {stem} | {s['tokens']} | {s['corr_start_deg']:.1f} {s['corr_start_joint']} / {s['corr_start_cm']:.1f} | "
-                        f"{s['corr_end_deg']:.1f} {s['corr_end_joint']} / {s['corr_end_cm']:.1f} | {_f(s['ms'], '.1f')} |")
+            w = s.get("wrist_deg_s") or {}
+            rows.append(f"| {stem} | {s.get('hand_mode', 'model')} | {s['tokens']} | "
+                        f"{s['corr_start_deg']:.1f} {s['corr_start_joint']} / {s['corr_start_cm']:.1f} | "
+                        f"{s['corr_end_deg']:.1f} {s['corr_end_joint']} / {s['corr_end_cm']:.1f} | "
+                        f"{pair(s.get('forearm_deg'))} | {pair(s.get('wrist_raw_deg'))} | "
+                        f"{pair([w['l'], w['r']] if w else None)} | {_f(s['ms'], '.1f')} |")
     for stem, r in sorted((k, v) for k, v in res.items() if not k.startswith("_")):
         for end in ("start", "end"):
             if isinstance(r.get(end), dict) and "error" in r[end]:

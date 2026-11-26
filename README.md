@@ -110,7 +110,8 @@ frames.
 
 ## link: MotionBricks link pieces (MG8)
 
-`motiongen link <recipes...> --out <dir> [--hub-root <dir>] [--only <glob>] [--plan] [--force]` generates link pieces
+`motiongen link <recipes...> --out <dir> [--hub-root <dir>] [--only <glob>] [--hand-mode slerp|model] [--plan] [--force]`
+generates link pieces
 (approach, enter/exit between hubs, loop seams) with NVIDIA MotionBricks v0.2.0 in-betweening: one process, one
 resident `MotionBricks-SOMA-RP-v1` engine (TensorRT FP16 plan, cached in `--trt-cache`, default
 `C:\mbtest\motionbricks\.trt-cache`; a missing plan builds once, ~7 min and ~7 GB host RAM). Per take:
@@ -121,6 +122,17 @@ miss per end that the endpoint correction spreads over the piece, `deterministic
 foot contacts, heel/toe L/R 0-1) and a `jobs.jsonl` line. Resumable: takes with BVH + provenance are skipped. Then
 `motiongen hubcheck <out> --hub-root <same>` measures both ends (hubs or clip frames), foot slide and the correction
 table.
+
+**Hands (MG8b, `--hand-mode`).** The model ignores the target wrists (raw miss 29-53 deg), and the endpoint correction
+would spread that miss over the piece. `slerp` (default) therefore replaces the local rotations of the wrists and fingers
+(the SOMA-77 subtrees under `LeftHand` / `RightHand`, 50 joints) with a slerp from the `from` pose to the `to` pose over
+the piece, eased by smoothstep (zero speed at both ends: the hub ends are held poses, and the correction's linear weight
+would start the hand at full speed). The rest of the body keeps the model output and its endpoint correction. `model`
+keeps the model's corrected hands (MG8, the A/B arm). `.prov.json` records `hand_mode` (+ `hand_slerp`), the
+correction size over the corrected joints only, the raw miss per body joint (`correction.per_joint`) and the wrist peak
+speed. hubcheck's link table prints the hand mode, the forearm and wrist raw miss, and each wrist's peak frame-to-frame
+speed (deg/s, from the BVH). Hand contacts stay runtime IK. Resume skips existing takes: switching modes needs `--force`
+or a new `--out`.
 
 **Venv.** It runs in the MotionBricks venv (Python 3.12, TensorRT, Warp; no torch), with this repo installed there:
 `uv pip install -e <this repo> --python C:\mbtest\motionbricks\.venv\Scripts\python.exe`. Run it from any folder but

@@ -9,7 +9,11 @@ Resumable: a take whose BVH and provenance exist is skipped.
 
 Per job: context = the 4 source frames ending on `from`, target = `target_poses` frames starting at `to`, placed
 next to the context (README "link"); then one raw generation (endpoint correction off: its endpoint misses are the
-correction size), and two corrected ones (the take, and a repeat that measures determinism).
+correction size), and two corrected ones (the take, and a repeat that measures determinism). Then the hands (MG8b,
+`hand_mode`): `slerp` (default) replaces the wrists' and fingers' local rotations with a slerp from the `from` pose to
+the `to` pose over the piece, because the model ignores the target wrists (raw miss 29-53 deg) and the endpoint
+correction would spread that miss over the piece; the rest of the body keeps the corrected model output. `model` keeps
+the model's corrected hands (MG8 behaviour, the A/B arm). Hand contacts stay runtime IK.
 """
 
 from __future__ import annotations
@@ -30,6 +34,8 @@ from .links import (DEFAULT_MB_ROOT, MB_FPS, POSES_PER_TOKEN, TRIM_FRAMES, LinkJ
                     load_links, plan_links)
 
 MODEL_NAME = "MotionBricks-SOMA-RP-v1"
+HAND_MODES = ("slerp", "model")
+WRISTS = ("LeftHand", "RightHand")  # the slerped joints are these and every joint below them (fingers, End joints)
 
 
 # ---------------------------------------------------------------- poses (numpy, no GPU)
@@ -94,15 +100,84 @@ def place_target(ctx: tuple[np.ndarray, np.ndarray], tgt: tuple[np.ndarray, np.n
     return tl, tr
 
 
-def body_error(a_local: np.ndarray, a_root: np.ndarray, b_local: np.ndarray, b_root: np.ndarray) -> dict:
-    """One pose vs another (T-pose locals, same world frame): max local rotation over the 26 body joints (deg, with
-    its joint) and pelvis distance (cm)."""
+def body_error(a_local: np.ndarray, a_root: np.ndarray, b_local: np.ndarray, b_root: np.ndarray,
+               joints: tuple[str, ...] = BODY_JOINTS) -> dict:
+    """One pose vs another (T-pose locals, same world frame): max local rotation over `joints` (default the 26 body
+    joints; deg, with its joint) and pelvis distance (cm)."""
     ix = soma.rest()["index"]
-    j = [ix[n] for n in BODY_JOINTS]
+    j = [ix[n] for n in joints]
     ang = soma.angle_deg(a_local[j], b_local[j])
     w = int(np.argmax(ang))
-    return {"rot_max_deg": round(float(ang[w]), 3), "joint": BODY_JOINTS[w],
+    return {"rot_max_deg": round(float(ang[w]), 3), "joint": joints[w],
             "root_cm": round(float(np.linalg.norm(a_root - b_root)) * 100, 3)}
+
+
+def joint_errors(a_local: np.ndarray, b_local: np.ndarray) -> dict[str, float]:
+    """Local rotation angle (deg) per body joint, one pose vs another."""
+    j = [soma.rest()["index"][n] for n in BODY_JOINTS]
+    ang = soma.angle_deg(a_local[j], b_local[j])
+    return {n: round(float(a), 2) for n, a in zip(BODY_JOINTS, ang)}
+
+
+# ---------------------------------------------------------------- hands (MG8b)
+
+
+def hand_joints() -> list[int]:
+    """SOMA-77 indices of the wrists (`WRISTS`) and every joint below them (fingers and their End joints)."""
+    r = soma.rest()
+    keep: set[int] = set()
+    for i, (n, p) in enumerate(zip(r["names"], r["parents"])):
+        if n in WRISTS or p in keep:
+            keep.add(i)
+    return sorted(keep)
+
+
+def smoothstep(t: np.ndarray) -> np.ndarray:
+    """3t^2 - 2t^3: 0 -> 1 with zero slope at both ends."""
+    return t * t * (3.0 - 2.0 * t)
+
+
+def slerp_hands(local: np.ndarray, a: np.ndarray, b: np.ndarray, joints: list[int] | None = None) -> np.ndarray:
+    """`local` (n, 77, 3, 3) T-pose locals with the `joints` (default `hand_joints()`) replaced by
+    a @ (a^T b)^w(i), w = smoothstep(i / (n - 1)): the shortest-arc slerp from pose `a` (77, 3, 3; the `from` end) to
+    pose `b` (the `to` end), exact at both ends.
+
+    Ease: smoothstep, not the endpoint correction's linear weight. The slerp replaces the whole wrist motion (the
+    correction only adds a delta to a moving pose), so a linear weight would start and stop the hand at constant speed
+    out of the held hub poses: a velocity step at both ends. Smoothstep starts and ends at rest; its peak speed is 1.5x
+    the mean. A right-multiplied slerp is the same rotation path in the T-pose and the BONES-SEED rest conventions
+    (the rest offsets conjugate a^T b), so slerping T-pose locals is exact for either."""
+    j = hand_joints() if joints is None else joints
+    n = len(local)
+    out = local.copy()
+    if n < 2:
+        return out
+    A, B = a[j], b[j]
+    q = soma.mat_to_quat(np.swapaxes(A, -1, -2) @ B)  # (J, 4) x y z w, w >= 0: shortest arc
+    s = np.linalg.norm(q[:, :3], axis=-1)
+    theta = 2.0 * np.arctan2(s, q[:, 3])  # (J,)
+    axis = q[:, :3] / np.maximum(s, 1e-12)[:, None]  # zero for an identity relative rotation
+    w = smoothstep(np.arange(n) / (n - 1))  # (n,)
+    half = 0.5 * w[:, None] * theta[None]  # (n, J)
+    qt = np.concatenate([axis[None] * np.sin(half)[..., None], np.cos(half)[..., None]], -1)
+    out[:, j] = A[None] @ soma.quat_to_mat(qt)
+    out[-1, j] = B  # exact end (the quaternion round trip is ~1e-16 off)
+    return out
+
+
+def apply_hand_mode(local: np.ndarray, a: np.ndarray, b: np.ndarray, hand_mode: str) -> np.ndarray:
+    """MG8b hand step: `slerp` = `slerp_hands`, `model` = the model's corrected hands unchanged (MG8)."""
+    if hand_mode == "model":
+        return local
+    if hand_mode == "slerp":
+        return slerp_hands(local, a, b)
+    raise ValueError(f"hand_mode '{hand_mode}': expected one of {HAND_MODES}")
+
+
+def wrist_speed_max(local: np.ndarray, fps: float) -> dict[str, float]:
+    """Per wrist: the largest frame-to-frame local rotation over the piece, as deg/s."""
+    ix = soma.rest()["index"]
+    return {n: round(float(soma.angle_deg(local[:-1, ix[n]], local[1:, ix[n]]).max() * fps), 1) for n in WRISTS}
 
 
 # ---------------------------------------------------------------- MotionBricks
@@ -208,7 +283,8 @@ def _ref_prov(ref: PoseRef, path: Path, frame: int, end: str) -> dict:
     return {f"{end}_clip": {"path": str(path), "frame": frame}}
 
 
-def run_job(job: LinkJob, worker: MotionBricksWorker, sources: Sources, out: Path) -> dict:
+def run_job(job: LinkJob, worker, sources: Sources, out: Path, hand_mode: str = "slerp") -> dict:
+    """One take. `worker` = a `MotionBricksWorker` (or any object with its to_mb / from_mb / generate / provenance)."""
     t0 = time.perf_counter()
     sl, sr, spath = sources.clip(job.src)
     dl, dr, dpath = sources.clip(job.dst)
@@ -223,18 +299,25 @@ def run_job(job: LinkJob, worker: MotionBricksWorker, sources: Sources, out: Pat
     poses, contacts, ms = worker.generate(ctx_mb, tgt_mb, job.tokens, correct=True)
     again, _, _ = worker.generate(ctx_mb, tgt_mb, job.tokens, correct=True)
     local, root = worker.from_mb(poses)
+    local = apply_hand_mode(local, ctx[0][-1], tgt[0][0], hand_mode)
     rl, rr = worker.from_mb(raw)
     bvh, prov_path = job.outputs(out)
     bvh.parent.mkdir(parents=True, exist_ok=True)
     soma.write_bvh(bvh, local, root, MB_FPS)
     n = len(local)
+    names = soma.rest()["names"]
+    hands = {names[i] for i in hand_joints()} if hand_mode == "slerp" else set()
+    corrected = tuple(j for j in BODY_JOINTS if j not in hands)  # joints whose model output the correction moves
     stats = {
         "frames": n, "tokens": (n + TRIM_FRAMES) // POSES_PER_TOKEN, "seconds": round(n / MB_FPS, 3),
         "start_error": body_error(local[0], root[0], ctx[0][-1], ctx[1][-1]),
         "end_error": body_error(local[-1], root[-1], tgt[0][0], tgt[1][0]),
-        "correction": {"start": body_error(rl[0], rr[0], ctx[0][-1], ctx[1][-1]),
-                       "end": body_error(rl[-1], rr[-1], tgt[0][0], tgt[1][0]),
+        "correction": {"start": body_error(rl[0], rr[0], ctx[0][-1], ctx[1][-1], corrected),
+                       "end": body_error(rl[-1], rr[-1], tgt[0][0], tgt[1][0], corrected),
+                       "joints": "body without the slerped wrists" if hands else "body",
+                       "per_joint": {"start": joint_errors(rl[0], ctx[0][-1]), "end": joint_errors(rl[-1], tgt[0][0])},
                        "raw_frames": len(rl)},
+        "wrist_speed_max_deg_s": wrist_speed_max(local, MB_FPS),
         "deterministic": bool(again.shape == poses.shape and np.abs(again - poses).max() < 1e-5),
         "generate_ms": round(ms, 2), "raw_generate_ms": round(raw_ms, 2),
     }
@@ -245,6 +328,9 @@ def run_job(job: LinkJob, worker: MotionBricksWorker, sources: Sources, out: Pat
         **_ref_prov(job.src, spath, k, "from"), **_ref_prov(job.dst, dpath, h, "to"),
         "context_frames": ci, "target_frames": ti, "target_poses": job.target_poses,
         "allowed_tokens": list(job.tokens), "placement": job.placement, "endpoint_correction": True,
+        "hand_mode": hand_mode,
+        **({"hand_slerp": {"joints": len(hands), "roots": list(WRISTS), "ease": "smoothstep",
+                           "from": "last context pose", "to": "first target pose"}} if hands else {}),
         **stats,
         "recipe": job.source,
         "bvh": {"skeleton": "somaskel77", "units": "cm", "up": "+Y", "rest_pose": "standard T-pose",
@@ -286,13 +372,14 @@ def cmd_link(args) -> int:
     out.mkdir(parents=True, exist_ok=True)
     t_start = time.perf_counter()
     worker = MotionBricksWorker(args.precision, Path(args.trt_cache))
-    print(f"[motiongen link] engine {MODEL_NAME} {args.precision} loaded in {worker.load_s:.2f} s")
+    print(f"[motiongen link] engine {MODEL_NAME} {args.precision} loaded in {worker.load_s:.2f} s; "
+          f"hand_mode {args.hand_mode}")
     sources = Sources(hub_root)
     rows = ["| take | from -> to | frames | start err deg/cm | end err deg/cm | correction start deg joint / cm | "
             "correction end deg joint / cm | ms | deterministic |", "|---|---|---|---|---|---|---|---|---|"]
     try:
         for i, job in enumerate(todo):
-            s = run_job(job, worker, sources, out)
+            s = run_job(job, worker, sources, out, args.hand_mode)
             rec = {"ts": dt.datetime.now().isoformat(timespec="seconds"), "job": job.stem(), "kind": job.kind,
                    "from": job.src.label(), "to": job.dst.label(), **s}
             with (out / "jobs.jsonl").open("a", encoding="utf-8") as f:
@@ -316,6 +403,9 @@ def add_parser(sub) -> None:
     p.add_argument("--precision", choices=["fp16", "fp32"], default="fp16", help="TensorRT plan (fp16 = the cached one)")
     p.add_argument("--trt-cache", default=str(Path(os.environ.get("MOTIONGEN_MOTIONBRICKS") or DEFAULT_MB_ROOT) / ".trt-cache"),
                    help="TensorRT plan cache (a missing plan builds once: ~7 min, ~7 GB host RAM)")
+    p.add_argument("--hand-mode", choices=HAND_MODES, default="slerp",
+                   help="slerp (default): wrists + fingers slerped from the from pose to the to pose (MG8b); "
+                        "model: the model's corrected hands (MG8, the A/B arm)")
     p.add_argument("--plan", action="store_true", help="dry run: list the takes, no GPU")
     p.add_argument("--force", action="store_true", help="regenerate takes whose outputs exist")
     p.set_defaults(fn=cmd_link)
