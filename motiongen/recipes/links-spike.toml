@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# MG8 seed links (MotionBricks; Scrib docs/roadmaps/anim.md MG8, spike note docs/research/anim-2026-11-26/motionbricks.md).
+# Run in the MotionBricks venv: `motiongen link motiongen/recipes/links-spike.toml --out <dir>
+#   --hub-root "<scrib>/animation packs/generated"`, then `motiongen hubcheck <dir> --hub-root <same>`.
+# A link recipe holds only [[link]] / [[loop_seam]] tables (README "link"); `plan` / `run` refuse it.
+
+[[link]]
+id = "link.seat.chair.enter"  # stand.idle -> sit.chair at the chair (feet stay planted, the AN13 spike placement)
+from = "hub:stand.idle"
+to = "hub:sit.chair"
+placement = "feet"
+variants = [{}, { tokens = [6, 16] }]  # take 00: MotionBricks' default 8-14 tokens; take 01: the full 6-16 range
+
+[[link]]
+id = "link.seat.chair.exit"
+from = "hub:sit.chair"
+to = "hub:stand.idle"
+placement = "feet"
+
+[[loop_seam]]
+id = "seam.sit.chair.rest"  # the kept seat48 rest loop (the sit.chair hub's source): its end -> its own start
+clip = "tier1/sit.chair.rest/loop/sit.chair.rest.loop.seat48.00.bvh"

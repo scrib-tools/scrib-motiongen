@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """`python -m motiongen selftest`: parse every recipe in recipes/, plan them, check the format rules; `grade` gates on
-synthetic BVH fixtures; hub poses (recipes/hubs.toml). No GPU; torch + Kimodo (CPU) only for the hub-pose constraint
+synthetic BVH fixtures; hub poses (recipes/hubs.toml); MG8 link recipes and the numpy SOMA-77 port. No GPU; torch + Kimodo (CPU) only for the hub-pose constraint
 smoke test, skipped when they are not importable."""
 
 from __future__ import annotations
@@ -447,6 +447,140 @@ def hub_checks(check, bands) -> None:
     hub_pose_smoke(check, bands)
 
 
+def link_checks(check) -> None:
+    """MG8 link recipes, the sample-pose refusal, the numpy SOMA-77 port (BVH round trip) and link placement."""
+    import numpy as np
+
+    from . import soma
+    from .clipstats import _rot
+    from .hubcheck import hubcheck_dir, table
+    from .link_worker import _feet, place_target
+    from .links import link_plan_line, load_links, parse_links_text, plan_links
+
+    recipe = HERE / "recipes" / "links-spike.toml"
+    jobs = plan_links(load_links([recipe]), Path("gen"))
+    by = {j.stem(): j for j in jobs}
+    check(sorted(by) == ["link.seat.chair.enter.00", "link.seat.chair.enter.01", "link.seat.chair.exit.00", "seam.sit.chair.rest.00"]
+          and by["link.seat.chair.enter.00"].tokens == tuple(range(8, 15)) and by["link.seat.chair.enter.01"].tokens == tuple(range(6, 17))
+          and by["seam.sit.chair.rest.00"].tokens == (6,) and by["seam.sit.chair.rest.00"].placement == "seam"
+          and by["link.seat.chair.exit.00"].src.hub == "sit.chair" and by["link.seat.chair.exit.00"].dst.hub == "stand.idle",
+          f"links-spike.toml: {len(jobs)} link takes plan (enter x2 token ranges, exit, loop seam)")
+    row = link_plan_line(by["link.seat.chair.enter.00"])
+    check(" hub:stand.idle -> hub:sit.chair  tokens 8-14 (26-50f) placement feet target_poses 4" in row, f"link plan line: {row.strip()}")
+    seam = by["seam.sit.chair.rest.00"]
+    check(seam.src.at == "end" and seam.dst.at == "start" and seam.src.path == seam.dst.path and seam.frames_label() == "18f",
+          "loop seam: clip end -> its own start, 6 tokens = 18 frames")
+    one = parse_links_text('[[link]]\nid = "a.b"\nfrom = "clip:x/a.bvh#end"\nto = "clip:x/b.bvh#12"\nseconds = 1.0\n'
+                           'placement = { dx = 0.1, dyaw = 90 }\n', "<l>")[0]
+    check(one.tokens == (9,) and one.dst.at == "12" and one.placement == {"dx": 0.1, "dz": 0.0, "dyaw": 90.0},
+          "seconds = 1.0 -> 9 tokens (30 frames); clip frame index; explicit placement")
+    head = '[[link]]\nid = "a.b"\n'
+    hubs2 = 'from = "hub:stand.idle"\nto = "hub:sit.chair"\n'
+    bad = {
+        "tokens out of range": (head + hubs2 + "tokens = 5\n", "tokens = 5"),
+        "tokens and seconds": (head + hubs2 + "tokens = 8\nseconds = 1.0\n", "not both"),
+        "a bad pose ref": (head + 'from = "stand.idle"\nto = "hub:sit.chair"\n', "expected 'hub:<id>'"),
+        "an unknown hub": (head + 'from = "hub:fly"\nto = "hub:sit.chair"\n', "no hub 'fly'"),
+        "a bad placement": (head + hubs2 + 'placement = "air"\n', "placement = 'air'"),
+        "a seam placement": ('[[loop_seam]]\nid = "a.b"\nclip = "x.bvh"\nvariants = [{ placement = "feet" }]\n', "placement is fixed"),
+        "an unknown key": (head + hubs2 + "seed = 3\n", "unknown keys ['seed']"),
+    }
+    for label, (text, needle) in bad.items():
+        try:
+            parse_links_text(text, "<bad>")
+            check(False, f"link recipe rejects {label}")
+        except RecipeError as e:
+            check(needle in str(e), f"link recipe rejects {label}: {e}")
+    try:
+        parse_recipe_text(recipe.read_text(encoding="utf-8"), str(recipe))
+        check(False, "plan/run refuse a link recipe")
+    except RecipeError as e:
+        check("a link recipe" in str(e), "plan/run refuse a link recipe")
+
+    with tempfile.TemporaryDirectory() as d:
+        mb = Path(d) / "motionbricks"
+        sample = mb / "assets" / "motions" / "soma" / "sitting" / "sit_on_chair_loop.bvh"
+        old = os.environ.get("MOTIONGEN_MOTIONBRICKS")
+        os.environ["MOTIONGEN_MOTIONBRICKS"] = str(mb)
+        try:
+            cases = (("MotionBricks sample folder", sample), ("BONES take name", Path(d) / "neutral_walk_ff_180_R_002__A536_M.bvh"))
+            for label, path in cases:
+                for kind, text in (("link", head + f'from = "hub:stand.idle"\nto = "clip:{path.as_posix()}#start"\n'),
+                                   ("loop_seam", f'[[loop_seam]]\nid = "a.b"\nclip = "{path.as_posix()}"\n')):
+                    try:
+                        plan_links(parse_links_text(text, "<refuse>"), Path(d))
+                        check(False, f"refuses a {label} as a {kind} pose source")
+                    except RecipeError as e:
+                        check("evaluation" in str(e).lower(), f"refuses a {label} as a {kind} pose source")
+            hub = parse_hubs_text('[[hub]]\nid = "stand.idle"\nfamily = "any"\nbody = "stand.idle"\n'
+                                  f'source = "{sample.as_posix()}"\nframe = 0\n', "<h>")
+            try:
+                plan_links(parse_links_text(head + 'from = "hub:stand.idle"\nto = "hub:stand.idle"\n', "<refuse>", hub), Path(d))
+                check(False, "refuses a hub sourced from a sample motion")
+            except RecipeError as e:
+                check("evaluation" in str(e).lower(), f"refuses a hub sourced from a sample motion: {str(e)[:110]}...")
+        finally:
+            if old is None:
+                os.environ.pop("MOTIONGEN_MOTIONBRICKS", None)
+            else:
+                os.environ["MOTIONGEN_MOTIONBRICKS"] = old
+
+        # numpy SOMA-77 port: random poses through both rest conventions and the BVH writer / reader
+        rng = np.random.default_rng(7)
+        T = 6
+        q = rng.normal(size=(T, 77, 4))
+        q[..., 3] += 4.0  # moderate rotations
+        local = soma.quat_to_mat(q)
+        root = rng.normal(size=(T, 3)) * 0.3 + [0.0, 0.95, 0.0]
+        check(np.abs(soma.quat_to_mat(soma.mat_to_quat(local)) - local).max() < 1e-9, "quat <-> matrix round trip")
+        check(np.abs(soma.to_standard_tpose(soma.from_standard_tpose(local)) - local).max() < 1e-9,
+              "T-pose <-> BONES-SEED rest round trip")
+        g = soma.rot_y(0.4) @ np.array([[1.0, 0, 0], [0, 0, -1.0], [0, 1.0, 0]])
+        gz = np.array([[0.0, 0, 1.0], [0, 1.0, 0], [-1.0, 0, 0]]) @ np.array([[1.0, 0, 0], [0, 0.6, -0.8], [0, 0.8, 0.6]])
+        e = soma.mat_to_euler_zyx_deg(np.stack([g, gz]))
+        back = [_rot("Z", np.array(z)) @ _rot("Y", np.array(y)) @ _rot("X", np.array(x)) for z, y, x in e]
+        check(max(np.abs(b - m).max() for b, m in zip(back, (g, gz))) < 1e-9, "ZYX Euler matches the BVH reader (incl. gimbal lock)")
+        errs = {}
+        for kind in ("tpose", "seed"):
+            p = Path(d) / f"rt_{kind}.bvh"
+            soma.write_bvh(p, local, root, 30.0, kind)
+            l2, r2, k2, fps = soma.read_soma_bvh(p)
+            errs[kind] = (k2, float(soma.angle_deg(l2, local).max()), float(np.abs(r2 - root).max()), fps)
+        check(all(errs[k][0] == k and errs[k][1] < 1e-2 and errs[k][2] < 1e-7 and errs[k][3] == 30.0 for k in errs),
+              f"BVH round trip, both rests detected: max deg / m {[(k, round(v[1], 5), v[2]) for k, v in errs.items()]}")
+
+        # placement: target = a turned, shifted copy; `feet` puts its heading and ankles on the context's
+        rest_l = np.broadcast_to(np.eye(3), (4, 77, 3, 3)).copy()
+        rest_r = np.tile([0.0, 0.95, 0.0], (4, 1))
+        tl = rest_l.copy()
+        tl[:, 0] = soma.rot_y(1.2) @ tl[:, 0]
+        tr = rest_r + [2.0, 0.0, -1.0]
+        pl, pr = place_target((rest_l, rest_r), (tl, tr), "feet")
+        (h0, a0), (h1, a1) = _feet(rest_l[-1], rest_r[-1]), _feet(pl[0], pr[0])
+        check(abs(h0 - h1) < 1e-9 and np.abs(a0 - a1).max() < 1e-9, "placement 'feet': target heading and ankle XZ = the context's")
+        pl, pr = place_target((rest_l, rest_r), (tl, tr), {"dx": 0.0, "dz": 0.5, "dyaw": 0.0})
+        fwd = soma.rot_y(h0) @ np.array([0.0, 0.0, 0.5])
+        check(np.abs(_feet(pl[0], pr[0])[1] - (a0 + fwd[[0, 2]])).max() < 1e-9, "placement dz = 0.5 m forward of the context")
+
+        # hubcheck on a link take whose ends are clip frames (+ the correction table)
+        clip = Path(d) / "clip.bvh"
+        soma.write_bvh(clip, local, root, 30.0)
+        out = Path(d) / "links" / "x"
+        out.mkdir(parents=True)
+        soma.write_bvh(out / "x.00.bvh", local[2:5], root[2:5], 30.0)
+        corr = {"start": {"rot_max_deg": 4.5, "joint": "RightHand", "root_cm": 1.0},
+                "end": {"rot_max_deg": 2.0, "joint": "Head", "root_cm": 0.5}}
+        (out / "x.00.prov.json").write_text(json.dumps({"from_clip": {"path": str(clip), "frame": 2},
+                                                       "to_clip": {"path": str(clip), "frame": 4},
+                                                       "correction": corr, "tokens": 6, "generate_ms": 7.0}))
+        res = hubcheck_dir(Path(d) / "links", {}, Path(d))
+        r = res.get("x.00", {})
+        rows = table(res)
+        check(r.get("start", {}).get("rot_max_deg") == 0.0 and r.get("end", {}).get("worst_cm") == 0.0
+              and r.get("from_hub") == "clip.bvh#2" and any("4.5 RightHand / 1.0" in x for x in rows),
+              "hubcheck: link ends on clip frames measured (0 deg / 0 cm), correction table row")
+
+
 def hub_pose_smoke(check, bands) -> None:
     """CPU smoke test of `kimodo_backend.build_constraints` with start + end poses from a written SOMA-77 BVH."""
     try:
@@ -523,7 +657,7 @@ def main() -> int:
 
     bands = load_bands(HERE / "default_bands.json")
     check(bands.placeholder and set(bands.points) == {"seat", "table", "counter", "bed", "ground"}, "default_bands.json: 5 placeholder kinds")
-    recipes = sorted(p for p in (HERE / "recipes").glob("*.toml") if p.name != "hubs.toml")
+    recipes = sorted(p for p in (HERE / "recipes").glob("*.toml") if p.name != "hubs.toml" and not p.name.startswith("links-"))
     acts = load_recipes(recipes)
     jobs = plan(acts, bands)
     check(len(acts) >= 3, f"{len(recipes)} recipe files, {len(acts)} activities parse")
@@ -586,6 +720,7 @@ def main() -> int:
 
     grade_checks(check)
     hubcheck_checks(check)
+    link_checks(check)
 
     print(f"selftest: {'FAILED ' + str(fails) if fails else 'all ok'}")
     return 1 if fails else 0

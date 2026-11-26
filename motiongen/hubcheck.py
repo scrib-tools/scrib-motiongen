@@ -2,7 +2,8 @@
 """`python -m motiongen hubcheck <dir>` (AN44b, numpy only, no Kimodo): how close generated takes start and end on
 their hub poses (`recipes/hubs.toml`), plus foot slide over the take. Printed measurements, never pass/fail.
 
-A take is checked when its `.prov.json` names `from_hub` and/or `to_hub` (AN44a); others are skipped. Per checked end
+A take is checked when its `.prov.json` names `from_hub` / `to_hub` (AN44a) or `from_clip` / `to_clip` ({path, frame}:
+MG8 links and loop seams, which also add a correction-size table); others are skipped. Per checked end
 (first frame vs `from_hub`, last frame vs `to_hub`; the hub pose = frame `frame` of its SOMA-77 `source` BVH):
 - rotation: per-joint local rotation error (deg, geodesic) over the 26 body joints (the model's SOMA-30 set minus its
   four hand End joints: no fingers), max and mean. The pelvis (Hips) rotation is compared with each pose's heading
@@ -162,18 +163,43 @@ class HubFrames:
             raise HubError(f"hub '{hid}': frame {hub.frame} outside {path} ({take.frames} frames)")
         return take, hub.frame
 
+    def clip(self, ref: dict) -> tuple[Take, int]:
+        """A link end on a clip frame (`from_clip` / `to_clip` = {path, frame}, MG8 links and loop seams)."""
+        path = Path(ref["path"])
+        if path not in self.cache:
+            if not path.exists():
+                raise HubError(f"clip {path} not found")
+            self.cache[path] = Take(parse_bvh(path))
+        take, k = self.cache[path], int(ref["frame"])
+        if not 0 <= k < take.frames:
+            raise HubError(f"clip {path}: frame {k} outside ({take.frames} frames)")
+        return take, k
+
+
+def _end_label(prov: dict, end: str) -> str | None:
+    if prov.get(f"{end}_hub"):
+        return prov[f"{end}_hub"]
+    c = prov.get(f"{end}_clip")
+    return f"{Path(c['path']).name}#{c['frame']}" if isinstance(c, dict) else None
+
 
 def check_take(path: Path, prov: dict, hubs: HubFrames) -> dict:
     t = Take(parse_bvh(path))
-    out: dict = {"from_hub": prov.get("from_hub"), "to_hub": prov.get("to_hub"), "frames": t.frames}
-    for end, key, k in (("start", "from_hub", 0), ("end", "to_hub", t.frames - 1)):
-        if prov.get(key):
+    out: dict = {"from_hub": _end_label(prov, "from"), "to_hub": _end_label(prov, "to"), "frames": t.frames}
+    for end, key, k in (("start", "from", 0), ("end", "to", t.frames - 1)):
+        if prov.get(f"{key}_hub") or prov.get(f"{key}_clip"):
             try:
-                hub, h = hubs.get(prov[key])
+                hub, h = hubs.get(prov[f"{key}_hub"]) if prov.get(f"{key}_hub") else hubs.clip(prov[f"{key}_clip"])
                 out[end] = pose_error(t, k, hub, h)
             except HubError as e:
                 out[end] = {"error": str(e)}
     out.update(foot_slide(t))
+    if isinstance(prov.get("correction"), dict):  # MG8 link takes: endpoint correction size + generation time
+        c = prov["correction"]
+        out["link"] = {"tokens": prov.get("tokens"), "ms": prov.get("generate_ms"),
+                       "corr_start_deg": c["start"]["rot_max_deg"], "corr_start_joint": c["start"]["joint"],
+                       "corr_start_cm": c["start"]["root_cm"], "corr_end_deg": c["end"]["rot_max_deg"],
+                       "corr_end_joint": c["end"]["joint"], "corr_end_cm": c["end"]["root_cm"]}
     return out
 
 
@@ -185,7 +211,7 @@ def hubcheck_dir(root: Path, hubs: dict[str, Hub], hub_root: Path) -> dict:
     for f in collect([str(root)]):
         pp = f.with_suffix(".prov.json")
         prov = json.loads(pp.read_text(encoding="utf-8")) if pp.exists() else {}
-        if not (prov.get("from_hub") or prov.get("to_hub")):
+        if not any(prov.get(k) for k in ("from_hub", "to_hub", "from_clip", "to_clip")):
             skipped.append(f.stem)
             continue
         out[f.stem] = check_take(f, prov, frames)
@@ -238,6 +264,13 @@ def table(res: dict) -> list[str]:
         cell = lambda v: "-" if v is None else f"{v[0]:.1f}/{v[1]:.1f}"
         rows.append(f"| {g} | {s['takes']} | " + " | ".join(cell(s[k]) for k in (
             "start_rot_max_deg", "start_worst_cm", "end_rot_max_deg", "end_worst_cm", "slide_p95_cm_s")) + " |")
+    links = sorted((k, v["link"]) for k, v in res.items() if not k.startswith("_") and "link" in v)
+    if links:
+        rows += ["", "| link take | tokens | correction start deg joint / pelvis cm | correction end deg joint / pelvis cm | ms/segment |",
+                 "|---|---|---|---|---|"]
+        for stem, s in links:
+            rows.append(f"| {stem} | {s['tokens']} | {s['corr_start_deg']:.1f} {s['corr_start_joint']} / {s['corr_start_cm']:.1f} | "
+                        f"{s['corr_end_deg']:.1f} {s['corr_end_joint']} / {s['corr_end_cm']:.1f} | {_f(s['ms'], '.1f')} |")
     for stem, r in sorted((k, v) for k, v in res.items() if not k.startswith("_")):
         for end in ("start", "end"):
             if isinstance(r.get(end), dict) and "error" in r[end]:
@@ -255,7 +288,7 @@ def cmd_hubcheck(args) -> int:
     out = Path(args.out) if args.out else root / "hubcheck.json"
     write_json_atomic(out, res)
     print("\n".join(table(res)))
-    print(f"{len(res) - 2} hub takes, {len(res['_skipped'])} skipped (no from_hub / to_hub); wrote {out}")
+    print(f"{len(res) - 2} hub takes, {len(res['_skipped'])} skipped (no from/to hub or clip); wrote {out}")
     return 0
 
 

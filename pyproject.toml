@@ -9,7 +9,8 @@ description = "Offline clip factory: activity recipes to SOMA-77 BVH clips with 
 readme = "README.md"
 license = "GPL-3.0-or-later"
 requires-python = ">=3.11"
-# numpy only for `selftest`, `plan` and `grade`; `run` and `bench` also need torch, huggingface_hub and Kimodo
+# numpy only for `selftest`, `plan`, `grade` and `hubcheck`; `run` and `bench` also need torch, huggingface_hub and Kimodo;
+# `link` runs in the MotionBricks venv (its own clone, see README "link")
 # (installed from its own clone, see README "Setup").
 dependencies = ["numpy"]
 
@@ -23,7 +24,7 @@ motiongen = "motiongen.__main__:main"
 packages = ["motiongen"]
 
 [tool.setuptools.package-data]
-motiongen = ["default_bands.json", "soma77_joints.txt", "recipes/*.toml"]
+motiongen = ["default_bands.json", "soma77_joints.txt", "soma77_rest.json", "recipes/*.toml"]
 
 [tool.setuptools.dynamic]
 version = { attr = "motiongen.TOOL_VERSION" }

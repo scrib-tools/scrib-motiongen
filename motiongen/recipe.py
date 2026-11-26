@@ -407,6 +407,8 @@ def parse_recipe_text(text: str, src: str, hubs=None) -> list[Activity]:
         raise RecipeError(f"{src}: TOML error: {e}") from e
     if "hub" in data and "activity" not in data:
         raise RecipeError(f"{src}: a hubs file (motiongen.hubs), not a recipe")
+    if ("link" in data or "loop_seam" in data) and "activity" not in data:
+        raise RecipeError(f"{src}: a link recipe (run it with `motiongen link`), not an activity recipe")
     _check_keys(src, "top level", data, {"activity"})
     rows = data.get("activity", [])
     if not isinstance(rows, list) or not rows:
