@@ -1,0 +1,30 @@
+# Hub poses (AN43, motion-generation.md "Interaction pieces and hub poses"). Every interaction piece starts and ends
+# on a hub listed here; recipes name them as `start_pose = "hub:<id>"` / `end_pose = "hub:<id>"`.
+#
+# id     = body hub + hand state: `<body>` with both hands empty, else `<body>+L:<prop>` / `+R:<prop>` (L first),
+#          e.g. "sit.chair+R:cup". The loader checks the id against body + hands.
+# family = interaction family the hub belongs to ("chair", "bench" ...); "any" = shared by every family.
+# body   = body hub: stand.idle, sit.<seat>, lie.bed, lean.wall, kneel ... (style classes: stand.idle@old).
+# hands  = { L = "empty" | <prop class>, R = ... } (default both empty).
+# source = one SOMA-77 BVH take written by motiongen (Kimodo export, T-pose or BONES-SEED rest, detected from the
+#          file): a path relative to the output root (--out, e.g. 'animation packs/generated') or absolute.
+# frame  = 0-based frame of that take. Never hand-typed angles.
+#
+# This file sits beside the recipes but is not one: `motiongen.hubs` loads it, and passing it to `plan`/`run` as a
+# recipe is an error.
+
+[[hub]]
+id = "stand.idle"
+family = "any"
+body = "stand.idle"
+hands = { L = "empty", R = "empty" }
+source = "samples/stand_still.bvh"  # Kimodo sample "a person stands still", standard T-pose rest, 90 frames
+frame = 45
+
+[[hub]]
+id = "sit.chair"
+family = "chair"
+body = "sit.chair"
+hands = { L = "empty", R = "empty" }
+source = "tier1/sit.chair.rest/loop/sit.chair.rest.loop.seat48.00.bvh"  # seated, hands on thighs, 0.53 m pelvis
+frame = 120

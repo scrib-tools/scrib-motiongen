@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""motiongen CLI: `plan`, `run`, `bench`, `selftest`, `stats`, `grade`, `joints`. See README.md."""
+"""motiongen CLI: `plan`, `run`, `bench`, `selftest`, `stats`, `grade`, `hubcheck`, `joints`. See README.md."""
 
 from __future__ import annotations
 
@@ -13,7 +13,8 @@ import time
 from pathlib import Path
 
 from . import TOOL_VERSION
-from .recipe import Job, RecipeError, load_bands, load_recipes, plan
+from .hubs import HubError
+from .recipe import Job, RecipeError, job_hubs, load_bands, load_recipes, plan, plan_line
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_STEPS = 50
@@ -43,9 +44,23 @@ def cmd_plan(args) -> int:
     for j in jobs:
         state = "done" if out and j.done(out) else "todo"
         clips += len(j.variants)
-        print(f"{state:4}  {j.key:48} {j.num_frames:4}f seed {j.seed:<10} {json.dumps(j.constraints, separators=(',', ':'))}")
+        print(plan_line(j, state))
     print(f"{len(jobs)} jobs, {clips} clips, bands {bands.source}{' (PLACEHOLDER)' if bands.placeholder else ''}")
     return 0
+
+
+def _cfg_prov(job: Job, worker) -> dict:
+    """Guidance actually used: the recipe's `cfg_weight` [text, constraint], or Kimodo's default read from the model."""
+    d = worker.cfg_default()
+    if job.cfg_weight is None:
+        return {"cfg_type": d["cfg_type"], "cfg_weight": d["cfg_weight"], "cfg_weight_source": "kimodo default"}
+    return {"cfg_type": d["cfg_type"], "cfg_weight": job.cfg_weight, "cfg_weight_source": "recipe"}
+
+
+def _hub_prov(job: Job) -> dict:
+    """`from_hub` / `to_hub` (AN43 piece metadata) when the phase has a start_pose / end_pose; nothing otherwise."""
+    a, b = job_hubs(job.constraints)
+    return {k: v for k, v in (("from_hub", a), ("to_hub", b)) if v}
 
 
 def _write_prov(path: Path, job: Job, n: int, worker, args, bands, metrics: dict, timings: dict) -> None:
@@ -71,7 +86,8 @@ def _write_prov(path: Path, job: Job, n: int, worker, args, bands, metrics: dict
         "diffusion_steps": args.steps,
         "precision": args.precision,
         "postprocess": not args.no_postprocess,
-        "cfg": "model default (separated, text 2.0, constraint 2.0)",
+        **_cfg_prov(job, worker),
+        **_hub_prov(job),
         "constraints": job.constraints,
         "recipe": job.source,
         "bands": bands.source,
@@ -92,7 +108,8 @@ def _make_worker(args):
 
     cache = Path(args.cache or os.environ.get("MOTIONGEN_CACHE") or Path(args.out) / "_cache" / "text-embeddings")
     return KimodoWorker(cache, encoder_device=args.encoder_device, precision=args.precision,
-                        postprocess=not args.no_postprocess, bvh_rest=args.bvh_rest)
+                        postprocess=not args.no_postprocess, bvh_rest=args.bvh_rest,
+                        hub_root=Path(args.hub_root or args.out))
 
 
 def run_jobs(jobs: list[Job], worker, args, bands, out: Path, log_path: Path | None) -> dict:
@@ -102,7 +119,8 @@ def run_jobs(jobs: list[Job], worker, args, bands, out: Path, log_path: Path | N
     tot = {"clips": 0, "clip_s": 0.0, "wall_s": 0.0, "encode_s": 0.0, "diffusion_s": 0.0, "postprocess_s": 0.0, "export_s": 0.0}
     for i, job in enumerate(jobs):
         t0 = time.perf_counter()
-        res, tm = worker.generate(job.prompt, job.num_frames, len(job.variants), args.steps, job.seed, job.constraints)
+        res, tm = worker.generate(job.prompt, job.num_frames, len(job.variants), args.steps, job.seed, job.constraints,
+                                  job.cfg_weight)
         t1 = time.perf_counter()
         metrics = clip_metrics(res["posed_joints"], worker.skel77, worker.fps, job.constraints)
         tm["metrics_s"] = time.perf_counter() - t1
@@ -288,6 +306,8 @@ def main(argv=None) -> int:
         p.add_argument("--bvh-rest", choices=["tpose", "seed"], default="tpose",
                        help="BVH rest pose: standard T-pose (default, world-axis offsets) or the BONES-SEED rest")
         p.add_argument("--cache", help="embedding cache dir (default $MOTIONGEN_CACHE or <out>/_cache/text-embeddings)")
+        p.add_argument("--hub-root", help="root that relative hub sources of recipes/hubs.toml resolve against "
+                                          "(default --out; e.g. 'animation packs/generated' for an --out sub-folder)")
 
     p = sub.add_parser("plan", help="dry run: list jobs")
     common(p, False)
@@ -312,13 +332,16 @@ def main(argv=None) -> int:
     from .grade import add_parser as add_grade
 
     add_grade(sub)
+    from .hubcheck import add_parser as add_hubcheck
+
+    add_hubcheck(sub)
     p = sub.add_parser("joints", help="write the SOMA-77 joint list file")
     p.add_argument("--path", default=str(HERE / "soma77_joints.txt"))
     p.set_defaults(fn=cmd_joints)
     args = ap.parse_args(argv)
     try:
         return args.fn(args)
-    except RecipeError as e:
+    except (RecipeError, HubError) as e:
         print(f"motiongen: recipe error: {e}", file=sys.stderr)
         return 2
 

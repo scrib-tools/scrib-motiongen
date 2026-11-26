@@ -17,18 +17,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .hubs import Hub, HubError, default_hubs
+
 KIMODO_FPS = 30  # Kimodo-SOMA-RP-v1.2 config (`fps: 30`); checked against the model at run time.
 MAX_DURATION_S = 10.0  # Kimodo limit per prompt (docs/source/key_concepts/limitations.md).
 MAX_KEYFRAMES = 19  # Kimodo: fewer than 20 constrained frames per constraint type.
 DEFAULT_KEY_SPACING_S = 0.5
 
-ACTIVITY_KEYS = {"id", "point", "props", "phases", "variants", "duration", "prompt", "constraints", "notes", "seed"}
-PHASE_CONSTRAINT_KEYS = {"pelvis_height", "root", "hand_l", "hand_r", "start_pose", "keys"}
+ACTIVITY_KEYS = {"id", "point", "props", "phases", "variants", "duration", "prompt", "constraints", "notes", "seed", "cfg_weight"}
+PHASE_CONSTRAINT_KEYS = {"pelvis_height", "root", "hand_l", "hand_r", "start_pose", "end_pose", "pose_frames", "keys"}
 HEIGHT_TABLE_KEYS = {"height", "at"}
 HAND_KEYS = {"height", "forward", "side", "at"}
 ID_RE = re.compile(r"^[a-z0-9_]+(\.[a-z0-9_]+)*$")
 PHASE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 BAND_REF_RE = re.compile(r"^band\.([a-z_]+)\s*(?:([+-])\s*([0-9]*\.?[0-9]+))?$")
+# `root = "profile:..."` fields: seconds for the segments, m/s for speed, degrees for turn. Every field but `speed`
+# defaults to 0; `steady` is not a field, it fills whatever the phase duration leaves.
+PROFILE_KEYS = ("hold", "ramp", "speed", "decel", "rest", "turn")
+PROFILE_SUBSTEPS = 8  # integration substeps per frame for a turning profile (numerics, not a tunable)
 
 
 class RecipeError(ValueError):
@@ -100,12 +106,24 @@ class HandSpec:
 @dataclass
 class PhaseConstraints:
     pelvis_height: list[HeightSpec] | None = None  # one or more keyframe groups, each with its own height
-    root: str | None = None  # "fixed" | "fixed_xz" | "path:x,z;x,z" | "path:x,z@t;x,z@t" (t in seconds)
+    # "fixed" | "fixed_xz" | "path:x,z;x,z" | "path:x,z@t;x,z@t" (t in seconds) |
+    # "profile:hold=0.5,ramp=1.5,speed=1.6,decel=0.9,rest=0.8,turn=90": a dense root path, one key per frame, from a
+    # speed profile over the phase: hold (still) -> ramp (smoothstep 0 -> speed) -> steady (fills the rest of the
+    # duration) -> decel (smoothstep speed -> 0) -> rest (still). Segments in seconds (default 0), speed in m/s
+    # (required, > 0), along +Z; turn (degrees, + = left, default 0, needs ramp > 0) swings the travel direction over
+    # the ramp (smoothstep) and keys the root heading at the last frame. Distance = integral of the speed.
+    root: str | None = None
     hands: dict[str, list[HandSpec]] = field(default_factory=dict)  # "l" / "r" -> keyframe groups
     keys: float = DEFAULT_KEY_SPACING_S
+    # Hub poses (AN43): `start_pose = "hub:<id>"` / `end_pose = "hub:<id>"`, full-body keyframes held for
+    # `pose_frames` frames at the phase's first / last frames (see `resolve_constraints`).
+    start_pose: Hub | None = None
+    end_pose: Hub | None = None
+    pose_frames: int = 1
 
     def is_empty(self) -> bool:
-        return self.pelvis_height is None and self.root is None and not self.hands
+        return (self.pelvis_height is None and self.root is None and not self.hands
+                and self.start_pose is None and self.end_pose is None)
 
 
 @dataclass
@@ -120,6 +138,8 @@ class Activity:
     constraints: dict[str, PhaseConstraints]
     seed: int
     source: str
+    # Kimodo classifier-free guidance [text, constraint] (separated CFG); None = Kimodo's own default (2.0, 2.0).
+    cfg_weight: list[float] | None = None
 
 
 def _err(src: str, where: str, msg: str) -> RecipeError:
@@ -150,13 +170,36 @@ def _at_value(src: str, where: str, v: Any) -> Any:
     raise _err(src, where, f"at = {v!r}: expected 'all', 'start', 'end' or a list of seconds")
 
 
-def _parse_phase_constraints(src: str, where: str, t: Any) -> PhaseConstraints:
+def _hub_ref(src: str, where: str, v: Any, hubs) -> Hub:
+    """`"hub:<id>"` -> the Hub from hubs.toml (`hubs` = None loads the default table on first use)."""
+    if not isinstance(v, str) or not v.startswith("hub:"):
+        raise _err(src, where, f"{v!r}: expected 'hub:<id>' (a hub of recipes/hubs.toml)")
+    try:
+        table = default_hubs() if hubs is None else hubs
+    except HubError as e:
+        raise _err(src, where, f"cannot load the hub table: {e}") from e
+    hid = v[len("hub:"):].strip()
+    if hid not in table:
+        files = sorted({h.file for h in table.values()}) or ["hubs.toml"]
+        raise _err(src, where, f"no hub '{hid}' in {', '.join(files)} (hubs: {sorted(table)})")
+    return table[hid]
+
+
+def _parse_phase_constraints(src: str, where: str, t: Any, hubs=None) -> PhaseConstraints:
     if not isinstance(t, dict):
         raise _err(src, where, "must be a table")
     _check_keys(src, where, t, PHASE_CONSTRAINT_KEYS)
     pc = PhaseConstraints()
-    if "start_pose" in t:
-        raise _err(src, where, "start_pose (chains) is not implemented yet (MG8 links); remove it")
+    for key in ("start_pose", "end_pose"):
+        if key in t:
+            setattr(pc, key, _hub_ref(src, f"{where}.{key}", t[key], hubs))
+    if "pose_frames" in t:
+        n = t["pose_frames"]
+        if pc.start_pose is None and pc.end_pose is None:
+            raise _err(src, f"{where}.pose_frames", "needs start_pose or end_pose")
+        if not isinstance(n, int) or isinstance(n, bool) or n < 1:
+            raise _err(src, f"{where}.pose_frames", "must be an integer >= 1 (frames the hub pose is held)")
+        pc.pose_frames = n
     if "keys" in t:
         k = t["keys"]
         if not isinstance(k, (int, float)) or isinstance(k, bool) or k <= 0:
@@ -188,8 +231,11 @@ def _parse_phase_constraints(src: str, where: str, t: Any) -> PhaseConstraints:
         elif isinstance(r, str) and r.startswith("path:"):
             _parse_path(src, f"{where}.root", r)
             pc.root = r
+        elif isinstance(r, str) and r.startswith("profile:"):
+            _parse_profile(src, f"{where}.root", r)
+            pc.root = r
         else:
-            raise _err(src, f"{where}.root", f"{r!r}: expected 'fixed', 'fixed_xz' or 'path:x,z;x,z;...'")
+            raise _err(src, f"{where}.root", f"{r!r}: expected 'fixed', 'fixed_xz', 'path:x,z;x,z;...' or 'profile:speed=...'")
     for side in ("l", "r"):
         key = f"hand_{side}"
         if key not in t:
@@ -242,6 +288,95 @@ def _parse_path(src: str, where: str, r: str) -> list[tuple[float, float, float 
     return pts
 
 
+def _parse_profile(src: str, where: str, r: str) -> dict[str, float]:
+    """`profile:name=value,...` -> {hold, ramp, speed, decel, rest, turn} (see `PhaseConstraints.root`)."""
+    out: dict[str, float] = {}
+    for chunk in r[len("profile:"):].split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        name, eq, val = (x.strip() for x in chunk.partition("="))
+        if not eq or name not in PROFILE_KEYS:
+            raise _err(src, where, f"bad profile field {chunk!r} (expected name=value, names {list(PROFILE_KEYS)})")
+        if name in out:
+            raise _err(src, where, f"profile field '{name}' given twice")
+        try:
+            out[name] = float(val)
+        except ValueError as e:
+            raise _err(src, where, f"profile field {chunk!r}: {val!r} is not a number") from e
+        if not math.isfinite(out[name]) or (name != "turn" and out[name] < 0):
+            raise _err(src, where, f"profile field {chunk!r} must be a finite number" + ("" if name == "turn" else " >= 0"))
+    if out.get("speed", 0.0) <= 0:
+        raise _err(src, where, "profile needs speed=<m/s> > 0")
+    prof = {k: out.get(k, 0.0) for k in PROFILE_KEYS}
+    if prof["turn"] and not prof["ramp"]:
+        raise _err(src, where, "profile turn needs ramp > 0 (the travel direction swings over the ramp)")
+    return prof
+
+
+def _profile_steady(prof: dict[str, float], duration_s: float, where: str) -> float:
+    """Steady-speed seconds left once the other segments are placed; an error if they overrun the phase."""
+    used = prof["hold"] + prof["ramp"] + prof["decel"] + prof["rest"]
+    if used > duration_s + 1e-9:
+        raise RecipeError(f"{where}: profile segments hold+ramp+decel+rest = {used:g} s exceed the phase duration {duration_s:g} s")
+    return max(0.0, duration_s - used)
+
+
+def _smoothstep_integral(u: float) -> float:
+    """Integral of the smoothstep 3u^2 - 2u^3 from 0 to u (u clamped to 0..1); 0.5 at u = 1."""
+    u = min(1.0, max(0.0, u))
+    return u**3 - u**4 / 2
+
+
+def profile_distance(prof: dict[str, float], steady_s: float, t: float) -> float:
+    """Distance travelled (m) at time t (s): the exact integral of the profile's speed."""
+    v, h, r, dc = prof["speed"], prof["hold"], prof["ramp"], prof["decel"]
+    t1, t2 = h + r, h + r + steady_s
+    d = v * r * _smoothstep_integral((t - h) / r) if r > 0 else 0.0
+    d += v * min(max(t - t1, 0.0), steady_s)
+    if dc > 0 and t > t2:
+        u = min(1.0, (t - t2) / dc)
+        d += v * dc * (u - _smoothstep_integral(u))
+    return d
+
+
+def _profile_heading(prof: dict[str, float], t: float) -> float:
+    """Travel direction (radians, 0 = +Z, + = left toward +X) at time t."""
+    if not prof["turn"]:
+        return 0.0
+    u = min(1.0, max(0.0, (t - prof["hold"]) / prof["ramp"]))
+    return math.radians(prof["turn"]) * (3 * u * u - 2 * u**3)
+
+
+def resolve_profile(prof: dict[str, float], duration_s: float, num_frames: int, where: str) -> dict:
+    """One root XZ key per frame (frame f at f / fps), integrated from the speed profile; heading key if it turns."""
+    steady = _profile_steady(prof, duration_s, where)
+
+    def dist(t: float) -> float:
+        return profile_distance(prof, steady, t)
+
+    x = z = 0.0
+    pts = [[0.0, 0.0]]
+    for f in range(1, num_frames):
+        if prof["turn"]:  # midpoint rule on the heading, exact distance per substep
+            for k in range(PROFILE_SUBSTEPS):
+                ta = (f - 1 + k / PROFILE_SUBSTEPS) / KIMODO_FPS
+                tb = (f - 1 + (k + 1) / PROFILE_SUBSTEPS) / KIMODO_FPS
+                th = _profile_heading(prof, (ta + tb) / 2)
+                dd = dist(tb) - dist(ta)
+                x += math.sin(th) * dd
+                z += math.cos(th) * dd
+        else:
+            z = dist(f / KIMODO_FPS)
+        pts.append([round(x, 4), round(z, 4)])
+    out = {"type": "path", "frames": list(range(num_frames)), "points": pts,
+           "profile": {**{k: v for k, v in prof.items() if v}, "steady": round(steady, 4)}}
+    if prof["turn"]:
+        th = math.radians(prof["turn"])
+        out["heading"] = {"frames": [num_frames - 1], "cos_sin": [[round(math.cos(th), 6), round(math.sin(th), 6)]]}
+    return out
+
+
 def _per_phase(src: str, where: str, v: Any, phases: list[str], kind: type) -> dict:
     """`v` is one value for every phase, or a table phase -> value."""
     if isinstance(v, dict):
@@ -264,11 +399,14 @@ def _default_seed(activity_id: str) -> int:
     return int(hashlib.sha256(activity_id.encode()).hexdigest()[:8], 16)
 
 
-def parse_recipe_text(text: str, src: str) -> list[Activity]:
+def parse_recipe_text(text: str, src: str, hubs=None) -> list[Activity]:
+    """`hubs` = hub id -> Hub for `start_pose` / `end_pose` refs; None = recipes/hubs.toml (loaded only if referenced)."""
     try:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise RecipeError(f"{src}: TOML error: {e}") from e
+    if "hub" in data and "activity" not in data:
+        raise RecipeError(f"{src}: a hubs file (motiongen.hubs), not a recipe")
     _check_keys(src, "top level", data, {"activity"})
     rows = data.get("activity", [])
     if not isinstance(rows, list) or not rows:
@@ -301,7 +439,21 @@ def parse_recipe_text(text: str, src: str) -> list[Activity]:
         if not isinstance(cons_t, dict):
             raise _err(src, f"{where}.constraints", "must be a table phase -> constraints")
         _check_keys(src, f"{where}.constraints", cons_t, set(phases))
-        constraints = {p: _parse_phase_constraints(src, f"{where}.constraints.{p}", cons_t[p]) for p in cons_t}
+        constraints = {p: _parse_phase_constraints(src, f"{where}.constraints.{p}", cons_t[p], hubs) for p in cons_t}
+        for p, pc in constraints.items():
+            n_pose = pc.pose_frames * ((pc.start_pose is not None) + (pc.end_pose is not None))
+            if n_pose and n_pose > min(MAX_KEYFRAMES, int(duration[p] * KIMODO_FPS)):
+                raise _err(src, f"{where}.constraints.{p}.pose_frames",
+                           f"{n_pose} held pose frames: more than the phase's frames or Kimodo's {MAX_KEYFRAMES} keyframes")
+            if pc.root and pc.root.startswith("profile:"):
+                w = f"{src}: {where}.constraints.{p}.root"
+                _profile_steady(_parse_profile(src, f"{where}.constraints.{p}.root", pc.root), duration[p], w)
+        cfg = a.get("cfg_weight")
+        if cfg is not None:
+            if (not isinstance(cfg, list) or len(cfg) != 2
+                    or not all(isinstance(x, (int, float)) and not isinstance(x, bool) and x >= 0 for x in cfg)):
+                raise _err(src, f"{where}.cfg_weight", f"{cfg!r}: expected [text, constraint], two numbers >= 0 (Kimodo separated CFG)")
+            cfg = [float(x) for x in cfg]
         props = a.get("props", [])
         if not isinstance(props, list) or not all(isinstance(x, str) for x in props):
             raise _err(src, f"{where}.props", "must be a list of prop class names")
@@ -311,7 +463,7 @@ def parse_recipe_text(text: str, src: str) -> list[Activity]:
         seed = a.get("seed", _default_seed(aid))
         if not isinstance(seed, int) or isinstance(seed, bool):
             raise _err(src, f"{where}.seed", "must be an integer")
-        out.append(Activity(aid, point, props, phases, variants, duration, prompt, constraints, seed, src))
+        out.append(Activity(aid, point, props, phases, variants, duration, prompt, constraints, seed, src, cfg))
     ids = [x.id for x in out]
     dups = {x for x in ids if ids.count(x) > 1}
     if dups:
@@ -319,7 +471,7 @@ def parse_recipe_text(text: str, src: str) -> list[Activity]:
     return out
 
 
-def load_recipes(paths: list[Path]) -> list[Activity]:
+def load_recipes(paths: list[Path], hubs=None) -> list[Activity]:
     acts: list[Activity] = []
     seen: dict[str, str] = {}
     for p in paths:
@@ -327,7 +479,7 @@ def load_recipes(paths: list[Path]) -> list[Activity]:
             text = Path(p).read_text(encoding="utf-8")
         except OSError as e:
             raise RecipeError(f"{p}: {e}") from e
-        for a in parse_recipe_text(text, str(p)):
+        for a in parse_recipe_text(text, str(p), hubs):
             if a.id in seen:
                 raise RecipeError(f"{p}: activity '{a.id}' already defined in {seen[a.id]}")
             seen[a.id] = str(p)
@@ -352,6 +504,7 @@ class Job:
     constraints: dict  # resolved, JSON-serializable (see resolve_constraints)
     props: list[str]
     source: str
+    cfg_weight: list[float] | None = None  # [text, constraint]; None = Kimodo's default
 
     def stem(self, n: int) -> str:
         return f"{self.activity}.{self.phase}.{self.band}.{n:02d}"
@@ -438,7 +591,8 @@ def _path_at(frames: list[int], points: list[list[float]], f: int) -> list[float
     return list(points[-1])
 
 
-def resolve_constraints(pc: PhaseConstraints, band: Band, bands: Bands, scale: float, num_frames: int, where: str) -> dict:
+def resolve_constraints(pc: PhaseConstraints, band: Band, bands: Bands, scale: float, num_frames: int, where: str,
+                        duration_s: float | None = None) -> dict:
     """Turn a recipe's phase constraints into numbers + frame indices (Kimodo canonical space).
 
     Values are per keyed frame: `pelvis_height.y[i]` and `hand_*.pos[i]` / `hand_*.root_xz[i]` belong to `frames[i]`.
@@ -454,6 +608,10 @@ def resolve_constraints(pc: PhaseConstraints, band: Band, bands: Bands, scale: f
         frames = _frames("all", num_frames, pc.keys)
         if pc.root in ("fixed", "fixed_xz"):
             out["root"] = {"type": pc.root, "frames": frames, "points": [[0.0, 0.0]] * len(frames)}
+        elif pc.root.startswith("profile:"):
+            prof = _parse_profile(where, "root", pc.root)
+            out["root"] = resolve_profile(prof, duration_s if duration_s is not None else num_frames / KIMODO_FPS,
+                                          num_frames, f"{where}.root")
         else:
             pts = _parse_path(where, "root", pc.root)
             timed = pts[0][2] is not None
@@ -478,7 +636,51 @@ def resolve_constraints(pc: PhaseConstraints, band: Band, bands: Bands, scale: f
         r = out.get("root")
         root_xz = [_path_at(r["frames"], r["points"], f) if r and r["type"] == "path" else [0.0, 0.0] for f in frames]
         out[f"hand_{side}"] = {"pos": poss, "frames": frames, "root_xz": root_xz}
+    _resolve_poses(pc, out, num_frames, where)
     return out
+
+
+def _resolve_poses(pc: PhaseConstraints, out: dict, num_frames: int, where: str) -> None:
+    """Hub poses -> `out["start_pose"]` / `out["end_pose"]`: the hub reference plus where the pose goes.
+
+    The pose itself (SOMA joints) is read from the hub's BVH frame by `kimodo_backend.HubPoseConstraint`, which puts
+    the hub's pelvis at `root_xz[i]` on `frames[i]`, turned to face `heading_cos_sin` (Kimodo heading [cos, sin]:
+    [1, 0] = +Z), at the hub's own pelvis height. Placement (Kimodo's full-body constraint needs the root XZ keyed,
+    so XZ is never left free): start_pose at the canonical start (XZ origin, facing +Z); end_pose on the root path
+    at those frames (its end) when the phase has a `root` path or profile, else at the origin; facing +Z, or the
+    profile's final heading when it turns.
+    """
+    last = num_frames - 1
+    n = pc.pose_frames
+    r = out.get("root")
+    hand_frames = set(out.get("hand_l", {}).get("frames", [])) | set(out.get("hand_r", {}).get("frames", []))
+    used: set[int] = set()
+    for key in ("start_pose", "end_pose"):
+        hub = getattr(pc, key)
+        if hub is None:
+            continue
+        frames = list(range(n)) if key == "start_pose" else list(range(last - n + 1, last + 1))
+        for other in ("pelvis_height", "hand_l", "hand_r"):
+            clash = sorted(set(frames) & set(out.get(other, {}).get("frames", [])))
+            if clash:
+                raise RecipeError(f"{where}.{key}: frames {clash} are also keyed by {other} (a hub pose fixes the whole body there)")
+        if r and r["type"] == "path":
+            xz = [_path_at(r["frames"], r["points"], f) for f in frames]
+        else:
+            xz = [[0.0, 0.0] for _ in frames]
+        heading = [1.0, 0.0]
+        if key == "end_pose" and r and "heading" in r:
+            heading = list(r["heading"]["cos_sin"][-1])
+        out[key] = {"hub": hub.id, "family": hub.family, "source": hub.source, "source_frame": hub.frame,
+                    "frames": frames, "root_xz": xz, "heading_cos_sin": heading}
+        used |= set(frames)
+    if used and len(used | hand_frames) > MAX_KEYFRAMES:  # hands and poses share Kimodo's joint-position keys
+        raise RecipeError(f"{where}: hub pose + hand keys use {len(used | hand_frames)} frames, Kimodo handles < 20")
+
+
+def job_hubs(constraints: dict) -> tuple[str | None, str | None]:
+    """(from_hub, to_hub) of a resolved job: the start_pose / end_pose hub ids, None where unset."""
+    return tuple(constraints[k]["hub"] if k in constraints else None for k in ("start_pose", "end_pose"))
 
 
 def plan(
@@ -501,13 +703,22 @@ def plan(
             pc = a.constraints.get(phase, PhaseConstraints())
             for band in bands.bands_for(a.point):
                 where = f"{a.source}: activity '{a.id}'.constraints.{phase} (band {band.id})"
-                cons = resolve_constraints(pc, band, bands, scale, nf, where)
+                cons = resolve_constraints(pc, band, bands, scale, nf, where, a.duration[phase])
                 base_seed = (a.seed + int(hashlib.sha256(f"{phase}.{band.id}".encode()).hexdigest()[:8], 16)) % (2**31)
                 idx = list(range(a.variants))
                 for c, start in enumerate(range(0, len(idx), max_batch)):
                     chunk = idx[start : start + max_batch]
                     jobs.append(
                         Job(a.id, phase, band.id, a.point, a.prompt[phase], a.duration[phase], nf, chunk,
-                            (base_seed + c) % (2**31), cons, a.props, a.source)
+                            (base_seed + c) % (2**31), cons, a.props, a.source, a.cfg_weight)
                     )
     return jobs
+
+
+def plan_line(j: Job, state: str = "todo") -> str:
+    """One `motiongen plan` row; `cfg [text,constraint]` appears only when the recipe sets `cfg_weight`,
+    `hubs a->b` only when the phase has a start_pose / end_pose (`none` for the unset end)."""
+    cfg = f" cfg {json.dumps(j.cfg_weight, separators=(',', ':'))}" if j.cfg_weight is not None else ""
+    a, b = job_hubs(j.constraints)
+    hubs = f" hubs {a or 'none'}->{b or 'none'}" if a or b else ""
+    return f"{state:4}  {j.key:48} {j.num_frames:4}f seed {j.seed:<10}{cfg}{hubs} {json.dumps(j.constraints, separators=(',', ':'))}"

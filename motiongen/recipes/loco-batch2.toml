@@ -1,0 +1,450 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Locomotion batch 2 (AN4b, 2026-11-26): the speed/prompt sweep that decides how batch 3 forces speed. Plan from
+# superfargoth/docs/research/animation/19-kimodo-prompting-2026-11-12.md section 6 (A speed sweep, B stops and turns,
+# C starts; D below), its section 5 constraint recipe and section 4 prompt rules (6-15 words, present tense, no long
+# body descriptions). AN1 findings on batch 1's shipped takes drive the prompt arms: walk arm swing 28 deg of range
+# (Morrowind 70), jog cadence 3.33 steps/s (human ~2.8) with 83 cm/s stance skate, sprint skate 77 cm/s and the arms
+# swing back only; batch 1 forced speed with sparse 1 Hz paths, here replaced by dense `profile:` roots (AN4a).
+# Output "animation packs/generated/loco2/" (BYO, never committed; `--out .../loco2`). Format:
+# bevyrrowind/docs/specs/motion-generation.md, "Recipes (MG1)"; the `profile:` and `cfg_weight` syntax: README "Recipes".
+# Left and straight only: the right side comes from the graph's Mirror node. Canonical space: start at XZ (0, 0) facing
+# +Z, left on +X. Ids carry "loco2." so they never collide with batch 1. Cycles are long takes (>= 5 strides after the
+# ramp; the bake cuts a same-foot loop); steady profiles start with a short `ramp` so the take never starts at full speed
+# (R19 section 3 point 2). Arm names: .free = no root constraint (speed control), .pNN = dense profile at N.N m/s,
+# .sNN = sparse timed path (0.5 s keys) at N.N m/s, .cfgTC = cfg_weight [T, C], others = prompt arms.
+# Best-guess dense speeds (R19 section 5: never key past what the free takes reach; retime at bake up to 1.15x walk,
+# 1.3x run): walk 1.4, jog 3.5, sprint 3.5. The prompt arms reuse exactly those constraints and change the prompt only.
+# Left out: D (sampling steps 50 vs 100): steps is not a recipe field but the run-wide `--steps` flag (default 50); run
+# a second pass with `--steps 100` into another folder on a subset if wanted. Turn-in-place end-heading keys: the
+# profile keys a heading only with a `ramp` (travel), so in-place turns stay `fixed_xz` with no heading key.
+
+# --- A. walk cycle sweep: 7 s (ramp 0.6 s, then >= 5 strides), prompt from R19 section 5 ------------------------------
+
+[[activity]]
+id = "loco2.walk.cycle.free"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 7.0
+prompt = "A person walks forward at a relaxed pace."
+
+[[activity]]
+id = "loco2.walk.cycle.p14"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 7.0
+prompt = "A person walks forward at a relaxed pace."
+constraints.act = { root = "profile:ramp=0.6,speed=1.4" }
+
+[[activity]]
+id = "loco2.walk.cycle.p16"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 7.0
+prompt = "A person walks forward at a relaxed pace."
+constraints.act = { root = "profile:ramp=0.6,speed=1.6" }
+
+# Sparse control: the same ramp=0.6,speed=1.6 profile sampled at 0.5 s keys (only the key density differs from .p16).
+[[activity]]
+id = "loco2.walk.cycle.s16"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 7.0
+prompt = "A person walks forward at a relaxed pace."
+constraints.act = { root = "path:0,0@0;0,0.324@0.5;0,1.12@1;0,1.92@1.5;0,2.72@2;0,3.52@2.5;0,4.32@3;0,5.12@3.5;0,5.92@4;0,6.72@4.5;0,7.52@5;0,8.32@5.5;0,9.12@6;0,9.92@6.5;0,10.72@7" }
+
+[[activity]]
+id = "loco2.walk.cycle.p16.cfg21"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 7.0
+prompt = "A person walks forward at a relaxed pace."
+constraints.act = { root = "profile:ramp=0.6,speed=1.6" }
+cfg_weight = [2.0, 1.0]
+
+[[activity]]
+id = "loco2.walk.cycle.p16.cfg23"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 7.0
+prompt = "A person walks forward at a relaxed pace."
+constraints.act = { root = "profile:ramp=0.6,speed=1.6" }
+cfg_weight = [2.0, 3.0]
+
+# --- A. jog cycle sweep: 5.5 s (ramp 0.8 s, then >= 5 strides) ---------------------------------------------------------
+
+[[activity]]
+id = "loco2.jog.cycle.free"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 5.5
+prompt = "A person runs forward at a steady pace."
+
+[[activity]]
+id = "loco2.jog.cycle.p25"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 5.5
+prompt = "A person runs forward at a steady pace."
+constraints.act = { root = "profile:ramp=0.8,speed=2.5" }
+
+[[activity]]
+id = "loco2.jog.cycle.p35"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 5.5
+prompt = "A person runs forward at a steady pace."
+constraints.act = { root = "profile:ramp=0.8,speed=3.5" }
+
+[[activity]]
+id = "loco2.jog.cycle.p45"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 5.5
+prompt = "A person runs forward at a steady pace."
+constraints.act = { root = "profile:ramp=0.8,speed=4.5" }
+
+# --- A. sprint cycle sweep: 5 s (ramp 1.0 s, then >= 5 strides) --------------------------------------------------------
+
+[[activity]]
+id = "loco2.sprint.cycle.free"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 5.0
+prompt = "A person sprints forward as fast as possible."
+
+[[activity]]
+id = "loco2.sprint.cycle.p35"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 5.0
+prompt = "A person sprints forward as fast as possible."
+constraints.act = { root = "profile:ramp=1.0,speed=3.5" }
+
+[[activity]]
+id = "loco2.sprint.cycle.p50"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 5.0
+prompt = "A person sprints forward as fast as possible."
+constraints.act = { root = "profile:ramp=1.0,speed=5.0" }
+
+# --- AN1 prompt arms: the best-guess dense constraint of each gait, prompt changed only -----------------------------
+# Walk: arm swing (28 deg vs Morrowind 70). Jog: long strides for a lower cadence (3.33 steps/s vs ~2.8). Sprint: arms.
+
+[[activity]]
+id = "loco2.walk.cycle.arms.1"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 7.0
+prompt = "A person walks forward swinging their arms naturally."
+constraints.act = { root = "profile:ramp=0.6,speed=1.4" }
+
+[[activity]]
+id = "loco2.walk.cycle.arms.2"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 7.0
+prompt = "A person walks forward at a relaxed pace with a natural arm swing."
+constraints.act = { root = "profile:ramp=0.6,speed=1.4" }
+
+[[activity]]
+id = "loco2.jog.cycle.stride.1"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 5.5
+prompt = "A person jogs forward with long relaxed strides."
+constraints.act = { root = "profile:ramp=0.8,speed=3.5" }
+
+[[activity]]
+id = "loco2.jog.cycle.stride.2"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 5.5
+prompt = "A person runs forward at an easy pace with long strides."
+constraints.act = { root = "profile:ramp=0.8,speed=3.5" }
+
+[[activity]]
+id = "loco2.sprint.cycle.arms.1"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 5.0
+prompt = "A person sprints forward pumping their arms."
+constraints.act = { root = "profile:ramp=1.0,speed=3.5" }
+
+# --- B. stops: R19 section 5 end-state wording; walk 1.4 m/s decel 0.9 s, run 2.5 m/s decel 0.6 s, rest 1.0 s ---------
+# Run stops/starts at 2.5 m/s (the slowest jog sweep arm, near R19's free jog of about 2.2): the bake retimes to the
+# winning cycle speed. A short ramp so the take does not open at full speed.
+
+[[activity]]
+id = "loco2.walk.stop.1"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 4.0
+prompt = "A person walking forward comes to a stop and stands still."
+constraints.act = { root = "profile:ramp=0.6,speed=1.4,decel=0.9,rest=1.0" }
+
+[[activity]]
+id = "loco2.walk.stop.2"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 4.0
+prompt = "A person walks forward, comes to a stop and stands still."
+constraints.act = { root = "profile:ramp=0.6,speed=1.4,decel=0.9,rest=1.0" }
+
+[[activity]]
+id = "loco2.run.stop.1"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 3.6
+prompt = "A person running forward comes to a stop, plants a foot and stands still."
+constraints.act = { root = "profile:ramp=0.8,speed=2.5,decel=0.6,rest=1.0" }
+
+[[activity]]
+id = "loco2.run.stop.2"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 3.6
+prompt = "A person jogging forward plants a foot, comes to a stop and stands still."
+constraints.act = { root = "profile:ramp=0.8,speed=2.5,decel=0.6,rest=1.0" }
+
+# --- B. turns in place: R19 form (direction, angle, place); pelvis XZ pinned, facing free -----------------------------
+# No end-heading key: the profile keys a heading only through a `ramp` (travel), which a turn on the spot has not.
+
+[[activity]]
+id = "loco2.turn.l90"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 2.0
+prompt = "A person standing turns 90 degrees to the left on the spot."
+constraints.act = { root = "fixed_xz" }
+
+[[activity]]
+id = "loco2.turn.l180"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 2.5
+prompt = "A person standing turns 180 degrees to the left on the spot."
+constraints.act = { root = "fixed_xz" }
+
+# --- C. starts: hold 0.5 s, ramp 1.5 s to the free speed (walk 1.4, run 2.5), 1.0-1.2 s gait tail for the blend --------
+# Turning starts swing the travel direction over the ramp (`turn`, + = left) and key the end heading.
+
+[[activity]]
+id = "loco2.walk.start.f.1"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 3.0
+prompt = "A person standing still starts walking forward."
+constraints.act = { root = "profile:hold=0.5,ramp=1.5,speed=1.4" }
+
+[[activity]]
+id = "loco2.walk.start.f.2"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 3.0
+prompt = "A person starts walking forward from standing still."
+constraints.act = { root = "profile:hold=0.5,ramp=1.5,speed=1.4" }
+
+[[activity]]
+id = "loco2.run.start.f.1"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 3.0
+prompt = "A person standing still starts running forward."
+constraints.act = { root = "profile:hold=0.5,ramp=1.5,speed=2.5" }
+
+[[activity]]
+id = "loco2.run.start.f.2"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 3.0
+prompt = "A person standing still starts jogging forward."
+constraints.act = { root = "profile:hold=0.5,ramp=1.5,speed=2.5" }
+
+[[activity]]
+id = "loco2.walk.start.l90"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 3.2
+prompt = "A person standing still turns to the left and starts walking."
+constraints.act = { root = "profile:hold=0.5,ramp=1.5,speed=1.4,turn=90" }
+
+[[activity]]
+id = "loco2.walk.start.l180"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 3.2
+prompt = "A person standing still turns 180 degrees to the left and starts walking."
+constraints.act = { root = "profile:hold=0.5,ramp=1.5,speed=1.4,turn=180" }
+
+[[activity]]
+id = "loco2.run.start.l90"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 3.2
+prompt = "A person standing still turns to the left and starts running."
+constraints.act = { root = "profile:hold=0.5,ramp=1.5,speed=2.5,turn=90" }
+
+[[activity]]
+id = "loco2.run.start.l180"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 3.2
+prompt = "A person standing still turns 180 degrees to the left and starts running."
+constraints.act = { root = "profile:hold=0.5,ramp=1.5,speed=2.5,turn=180" }
+
+# --- C2. lock-on strafe cycles: left sideways (+X) and backward (-Z), facing +Z; walk 6 s, jog 5 s ---------------------
+# `profile:` travels along +Z only, so the forced arms are timed `path:` keys at 0.5 s sampled from the same smoothstep
+# ramp (walk ramp 0.6 s to 1.0 m/s, jog 0.8 s to 2.0 m/s; plausible strafe/backpedal speeds, free takes are the check).
+# The path keys XZ only: the facing comes from the prompt.
+
+[[activity]]
+id = "loco2.walk.strafe.l.free"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 6.0
+prompt = "A person walks sideways to the left."
+
+[[activity]]
+id = "loco2.walk.strafe.l.s10"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 6.0
+prompt = "A person walks sideways to the left."
+constraints.act = { root = "path:0,0@0;0.203,0@0.5;0.7,0@1;1.2,0@1.5;1.7,0@2;2.2,0@2.5;2.7,0@3;3.2,0@3.5;3.7,0@4;4.2,0@4.5;4.7,0@5;5.2,0@5.5;5.7,0@6" }
+
+[[activity]]
+id = "loco2.walk.back.free"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 6.0
+prompt = "A person walks backward at a steady pace."
+
+[[activity]]
+id = "loco2.walk.back.s10"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 6.0
+prompt = "A person walks backward at a steady pace."
+constraints.act = { root = "path:0,0@0;0,-0.203@0.5;0,-0.7@1;0,-1.2@1.5;0,-1.7@2;0,-2.2@2.5;0,-2.7@3;0,-3.2@3.5;0,-3.7@4;0,-4.2@4.5;0,-4.7@5;0,-5.2@5.5;0,-5.7@6" }
+
+[[activity]]
+id = "loco2.jog.strafe.l.free"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 5.0
+prompt = "A person jogs sideways to the left."
+
+[[activity]]
+id = "loco2.jog.strafe.l.s20"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 5.0
+prompt = "A person jogs sideways to the left."
+constraints.act = { root = "path:0,0@0;0.269,0@0.5;1.2,0@1;2.2,0@1.5;3.2,0@2;4.2,0@2.5;5.2,0@3;6.2,0@3.5;7.2,0@4;8.2,0@4.5;9.2,0@5" }
+
+[[activity]]
+id = "loco2.jog.back.free"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 5.0
+prompt = "A person jogs backward at a steady pace."
+
+[[activity]]
+id = "loco2.jog.back.s20"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 5.0
+prompt = "A person jogs backward at a steady pace."
+constraints.act = { root = "path:0,0@0;0,-0.269@0.5;0,-1.2@1;0,-2.2@1.5;0,-3.2@2;0,-4.2@2.5;0,-5.2@3;0,-6.2@3.5;0,-7.2@4;0,-8.2@4.5;0,-9.2@5" }
+
+# --- pivots: R19 section 5 run pivot prompt, free first (a dense U-turn only once a free take proves the move) --------
+
+[[activity]]
+id = "loco2.run.pivot.l180.free"
+point = "ground"
+props = []
+phases = ["act"]
+variants = 6
+duration = 4.4
+prompt = "A person runs forward, turns sharply to the left and runs back."
