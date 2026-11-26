@@ -80,3 +80,16 @@ body = "stand.idle@old"
 hands = { L = "empty", R = "empty" }
 source = "sit1/_kimodo/stand.idle.old/loop/stand.idle.old.loop.ground0.01.bvh"  # style old standing idle
 frame = 99
+
+# --- AN30a (bed1): provisional: auto-picked, owner keep pending. Source = the best-graded bed.lie.sleep take (all 8
+# ungated, lying, face up; best skate + jerk p99 rank: the grader's foot-contact metrics are filled for lying takes),
+# frame = the calmest ~0.3 s in its middle third (least summed joint speed). Generated on flat ground (band-independent,
+# bed1/bands.json): the slot frame puts it on the bed top. Kimodo lays the body ~5 cm low (Hips 0.03 m, elbows below 0).
+
+[[hub]]
+id = "lie.bed"
+family = "bed"
+body = "lie.bed"
+hands = { L = "empty", R = "empty" }
+source = "bed1/_kimodo/bed.lie.sleep/loop/bed.lie.sleep.loop.ground0.05.bvh"  # Hips 0.033 m at frame (0.12 asked), body axis -179 deg (head toward -Z), provisional: owner keep pending
+frame = 145

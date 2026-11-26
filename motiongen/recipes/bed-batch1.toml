@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# AN30a bed batch 1, Kimodo half: the two lying loops of the bed family (sleep, restless), the `lie.bed` hub source.
+# Contract: Scrib motion-generation.md "Interaction families" (bed.lie = enter.left, loop x2 (sleep, restless),
+# exit.left; hubs stand.idle -> lie.bed -> stand.idle; enter/exit are MotionBricks links, a later recipe).
+# Run with --out "<scrib>/animation packs/generated/bed1/_kimodo" --bands "<scrib>/animation packs/generated/bed1/bands.json".
+# The lying loops are band-independent: the pose is the same at any bed height, only the root height differs, and the
+# slot frame applies the bed bands at runtime. So one set on flat ground (point ground, band ground0).
+# Kimodo follows the prompt for the posture and mostly ignores pelvis_height (AN26a), so the prompts say the pose in
+# plain words; pelvis_height 0.12 m = a supine pelvis centre (~0.10-0.14 m over the surface). root fixed_xz: a lying
+# body has no meaningful facing to key. 8 seeds each (spec: 8 seeds per piece).
+
+# --- sleep: calm, low motion (hub source) -----------------------------------------------------------------------------
+
+[[activity]]
+id = "bed.lie.sleep"
+point = "ground"
+phases = ["loop"]
+variants = 8
+duration = 8.0
+prompt = "A person lying flat on their back on the ground, legs straight and arms resting at their sides, is asleep, breathing slowly and hardly moving."
+constraints.loop = { pelvis_height = 0.12, root = "fixed_xz" }
+
+# --- restless: small shifts, back to the rest pose --------------------------------------------------------------------
+
+[[activity]]
+id = "bed.lie.restless"
+point = "ground"
+phases = ["loop"]
+variants = 8
+duration = 8.0
+prompt = "A person lying on their back on the ground, asleep, shifts a little: turns the head, moves an arm onto the stomach, bends and straightens one knee, then lies flat on the back again with the arms at the sides."
+constraints.loop = { pelvis_height = 0.12, root = "fixed_xz" }

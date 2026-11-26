@@ -384,7 +384,7 @@ def profile_checks(check, bands) -> None:
 
 def hub_checks(check, bands) -> None:
     real = load_hubs(DEFAULT_HUBS)
-    check({"stand.idle", "sit.chair", "sit.stool", "sit.chair.seat54", "sit.bench", "sit.floor", "sit.chair@old", "stand.idle@old"} == set(real) and real["sit.chair"].family == "chair" and real["sit.chair@old"].body == "sit.chair@old"
+    check({"stand.idle", "sit.chair", "sit.stool", "sit.chair.seat54", "sit.bench", "sit.floor", "sit.chair@old", "stand.idle@old", "lie.bed"} == set(real) and real["sit.chair"].family == "chair" and real["sit.chair@old"].body == "sit.chair@old"
           and real["stand.idle"].hands == {"L": "empty", "R": "empty"} and all(h.source.endswith(".bvh") for h in real.values()),
           f"recipes/hubs.toml: {len(real)} hubs parse ({', '.join(sorted(real))})")
     root = os.environ.get("MOTIONGEN_HUB_ROOT")
